@@ -1,6 +1,6 @@
 {
   "name": "deck",
-  "version": "0.1.0",
+  "version": "0.7.0",
   "description": "A pane beside the conversation for the work behind it: running shells and agents, the model and a clickable effort meter, and step-by-step progress of any job as a tree: /deck",
   "author": {
     "name": "Barış Demirhan",
@@ -11,5 +11,36 @@
   "supportUrl": "https://github.com/barisdemirhan/claude-deck/issues",
   "documentationUrl": "https://github.com/barisdemirhan/claude-deck#readme",
   "license": "MIT",
-  "types": "./types/index.d.ts"
+  "types": "./types/index.d.ts",
+  "userConfig": {
+    "hintLabel": {
+      "type": "string",
+      "title": "Hint label",
+      "description": "The label under the prompt: button (a row under the hint line you can press, where there is a pointer; text elsewhere), text (always at the end of the hint line) or off",
+      "options": [
+        "button",
+        "text",
+        "off"
+      ],
+      "default": "button"
+    },
+    "modelTool": {
+      "type": "boolean",
+      "title": "Tool for Claude",
+      "description": "Lets Claude show a job with levels as a progress tree, with two tools: plan and step",
+      "default": false
+    },
+    "toasts": {
+      "type": "boolean",
+      "title": "Toasts",
+      "description": "Tells you with a toast when a background job fails or ends after half a minute, when a step fails and when a run finishes",
+      "default": true
+    },
+    "transcriptRows": {
+      "type": "boolean",
+      "title": "Transcript rows",
+      "description": "Under the transcript's line for a group of tool calls, a row for each shell command: its mark, what it does and how long it ran",
+      "default": true
+    }
+  }
 }
