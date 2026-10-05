@@ -141,7 +141,7 @@ In Claude Code's `/config` menu, under the plugin's name:
 
 - A Claude Code build with mod support (plugins that ship a hooks module). Built and tested on 2.1.289. Mods sit behind a rollout switch, so if `/deck` does not show up after installing, the switch may still be off for you.
 - The terminal or the desktop app: the label and the pane are drawn only there. A press needs a pointer: the terminal's fullscreen layout or the desktop app. On the terminal's main screen the commands do it all.
-- The pane fits its rows to the width it gets: a long title is cut first, and the context meter moves to a row of its own when the first row is full.
+- The pane fits its rows to the width it gets: a long title is cut first, and the context meter moves to a row of its own when the first row is full. Under 44 columns a run loses its bar and keeps its count; under 36 a row loses its `shell` or `agent`.
 
 ## Privacy and data handling
 

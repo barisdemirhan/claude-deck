@@ -993,3 +993,28 @@ test('a press on the effort in the label steps it up as the pane\'s meter does, 
   expect(efforts).toEqual(['high', 'max'])
   expect([...panes]).toEqual([])
 })
+
+test(
+  'a narrow pane keeps the titles: a run loses its bar, and a row its kind',
+  { options: { modelTool: true } },
+  async ($, on) => {
+    const { bash } = world(on)
+    await $.session.start(SESSION)
+    bash.isError = true
+    await $.tool.call({ tool: 'Bash', command: 'make', description: 'Build it' })
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Fix the bug', steps: 'Read\nFix' })
+    const texts = async (bodyColumns: number): Promise<string[]> => {
+      const pane = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns } })
+      const found = (await pane.findAll({ type: 'Text' })).map((text) => text.text)
+      await pane.unmount()
+
+      return found
+    }
+
+    expect(await texts(64)).toEqual(expect.arrayContaining(['▱▱▱▱▱▱▱▱', 'shell', '0/2']))
+    const narrow = await texts(30)
+    expect(narrow).toEqual(expect.arrayContaining(['Fix the bug', '0/2']))
+    expect(narrow).not.toContain('▱▱▱▱▱▱▱▱')
+    expect(narrow).not.toContain('shell')
+  },
+)

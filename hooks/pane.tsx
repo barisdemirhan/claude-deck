@@ -69,6 +69,9 @@ const COLORS: Readonly<Record<Job['status'], string | undefined>> = {
 const PAD = 1
 const KIND_CELLS = 7
 const SPAN_CELLS = 8
+/** A pane narrower than this leaves out a run's bar, and one narrower than the other a row's kind: the title needs the cells. */
+const BAR_FROM = 44
+const KIND_FROM = 36
 
 const rule = ({ Text }: Kit, columns: number): RenderElement => (
   <Text dimColor wrap="truncate">
@@ -104,9 +107,10 @@ const jobRow = (
   job: Job,
   view: PaneView,
   indent = 0,
-  hasKind = true,
+  wantsKind = true,
 ): RenderElement => {
   const { Box, Text, Button } = kit
+  const hasKind = wantsKind && view.columns >= KIND_FROM
   // The row's cells less its mark, its indent and its columns at the right.
   const room =
     view.columns - 2 * PAD - 2 - 2 * indent - SPAN_CELLS - (hasKind ? KIND_CELLS : 0) - 1
@@ -166,7 +170,7 @@ const jobRow = (
           )}
         </Box>
       )}
-      {own.map((one) => jobRow(kit, one, view, indent + 1, hasKind))}
+      {own.map((one) => jobRow(kit, one, view, indent + 1, wantsKind))}
       {job.status === 'running' &&
         (view.nested[job.id] ?? []).flatMap((rows) =>
           rows.map((row) => stepRow(kit, row, view, indent + 1)),
@@ -311,7 +315,7 @@ const stepRow = (kit: Kit, row: Row, view: PaneView, indent = 0): RenderElement 
           {row.title}
         </Text>
       </Box>
-      {row.meter !== '' && (
+      {row.meter !== '' && view.columns >= BAR_FROM && (
         <Box width={METER_CELLS} flexShrink={0} justifyContent="flex-end">
           <Text color={STEP_COLORS[row.status]} dimColor={row.status === 'pending'}>
             {row.meter}
