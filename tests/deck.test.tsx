@@ -1128,11 +1128,11 @@ test(
 
     github.answers[CHECKS] = { check_runs: [check('test', 'completed', 'failure'), check('lint', 'completed', 'success')] }
     github.answers[STATUSES] = { statuses: [{ context: 'deploy/preview', state: 'success' }] }
-    await clock.advance(16_000)
+    await clock.advance(31_000)
     expect(toasts).toEqual(['✗ PR #12 · Fix the wallet: test failed'])
 
     // Over on two polls in a row: the watch ends, and GitHub is asked no more.
-    await clock.advance(16_000)
+    await clock.advance(31_000)
     const asked = github.asked.length
     await clock.advance(60_000)
     expect(github.asked.length).toBe(asked)
@@ -1164,7 +1164,7 @@ test(
 
     github.answers['repos/acme/shop/actions/runs/37387841808'] = { name: 'Deploy', display_title: 'Ship 1.4', status: 'completed' }
     github.answers['repos/acme/shop/actions/runs/37387841808/jobs?per_page=100'] = job('completed', 'success', 'completed')
-    await clock.advance(16_000)
+    await clock.advance(31_000)
 
     expect(github.submitted).toEqual([
       'The GitHub checks of "Deploy · Ship 1.4" are over: 2 passed, 0 failed.\nhttps://github.com/acme/shop/actions/runs/37387841808',

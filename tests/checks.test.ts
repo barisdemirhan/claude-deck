@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import {
   EMPTY_MS,
+  STALL_MS,
   checksOf,
   givenUp,
   homeOf,
@@ -115,6 +116,11 @@ test('a run waits for its first check, then ends once every check stays over', a
   expect(polled(once ?? WATCH, over)).toBeUndefined()
   // A workflow run is over when GitHub says so.
   expect(polled({ ...WATCH, kind: 'run' }, checksOf('run', { status: 'completed' }, { jobs: [] }))).toBeUndefined()
+
+  // A check that neither starts nor ends holds the watch only so long.
+  const stuck = watched(waiting, checksOf('ref', { check_runs: [{ name: 'ship', status: 'queued' }] }, {}), 5000)
+  expect(givenUp(WATCH, stuck, 5000 + STALL_MS - 1)).toBeUndefined()
+  expect(givenUp(WATCH, stuck, 5000 + STALL_MS)).toBe('no check moved for half an hour')
 
   expect(summaryOf(watched(waiting, over, 3000), WATCH.url)).toBe(
     'The GitHub checks of "Checks · main" are over: 0 passed, 1 failed.\n✗ test\nhttps://github.com/acme/shop/commits/main',

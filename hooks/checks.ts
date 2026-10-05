@@ -8,15 +8,17 @@ import { titleOf } from './runs'
 import { isRecord, toText } from './values'
 
 /** How often GitHub is asked while something is watched. */
-export const POLL_MS = 15 * 1000
+export const POLL_MS = 30 * 1000
 /** The same with no token: GitHub answers 60 requests an hour to a nameless caller. */
 export const POLL_ANON_MS = 150 * 1000
 /** A commit's checks are over once this many polls in a row found every one over: a later workflow may still add its own. */
 export const SETTLED_POLLS = 2
 /** A watch whose checks never showed up is given up after this long. */
 export const EMPTY_MS = 10 * 60 * 1000
+/** A watch none of whose checks moved for this long is given up: a job that waits on a runner or an approval may wait for good. */
+export const STALL_MS = 30 * 60 * 1000
 /** Any watch is given up after this long. */
-export const GIVE_UP_MS = 3 * 60 * 60 * 1000
+export const GIVE_UP_MS = 2 * 60 * 60 * 1000
 /** A watch is given up after this many polls in a row that GitHub did not answer. */
 export const MAX_FAILURES = 5
 export const MAX_WATCHES = 4
@@ -302,10 +304,14 @@ export const givenUp = (watch: Watch, run: Run, at: number): string | undefined 
   }
 
   if (at - watch.startedAt >= GIVE_UP_MS) {
-    return 'still not over after three hours'
+    return 'still not over after two hours'
   }
 
-  return isWaiting(run) && at - watch.startedAt >= EMPTY_MS ? 'no check showed up' : undefined
+  if (isWaiting(run)) {
+    return at - watch.startedAt >= EMPTY_MS ? 'no check showed up' : undefined
+  }
+
+  return at - Math.max(run.touchedAt, watch.startedAt) >= STALL_MS ? 'no check moved for half an hour' : undefined
 }
 
 const MAX_NAMED = 8
