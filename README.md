@@ -36,10 +36,7 @@ Nothing has to change. This repository is a marketplace of its own too, and `dec
 
 Under the prompt the deck keeps one label: the model, its effort, how many shells and agents run, and the job under way with its steps done.
 
-```
-? for shortcuts
-◨ Fable 5.1 ▰▰▰▱▱ high · ⏵ 3 · Auth renewal 5/8 ×
-```
+<img src="docs/label.png" width="604" alt="The conversation with the pane closed: under a group of three shell commands, a row for each with its mark and time; under the prompt, the deck's label with its mark, the model, the effort in its level's color, the count of what runs, the run under way and a close mark">
 
 Where there is a pointer, the terminal's fullscreen layout or the desktop app, the label is a row of its own right under the hint line, and it begins with the deck's mark, `◨`: a press on it opens or closes the pane, and so does a press on the run at the row's end. The model's name between them is plain text. Its effort is drawn in its level's color, and a press on the level's name steps it up, as on the pane's meter. What runs has the color of a running row, a failed step's `✗` is red, the rest is dim. `×` closes the row: the label is then text on the hint line. Where another mod has already drawn a row of its own there, the label joins that row at its end, so the two take one row between them. The model follows `/model` within two seconds; its effort shows again with its first request. On the terminal's main screen it is text at the end of the hint line. The **Hint label** setting keeps it text everywhere, or takes it off.
 
