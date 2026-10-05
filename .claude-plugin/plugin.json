@@ -1,6 +1,6 @@
 {
   "name": "deck",
-  "version": "0.7.3",
+  "version": "0.8.0",
   "description": "A pane beside the conversation for the work behind it: running shells and agents, the model and a clickable effort meter, and step-by-step progress of any job as a tree: /deck",
   "author": {
     "name": "Barış Demirhan",
@@ -41,6 +41,12 @@
       "title": "Transcript rows",
       "description": "Under the transcript's line for a group of tool calls, a row for each shell command: its mark, what it does and how long it ran",
       "default": true
+    },
+    "github": {
+      "type": "boolean",
+      "title": "GitHub checks",
+      "description": "Follows the checks of a pull request, a workflow run, a branch or a commit on GitHub and shows them as a run: /deck watch, and a watch tool for Claude. Asks GitHub with the gh command, or directly where there is none",
+      "default": false
     }
   }
 }

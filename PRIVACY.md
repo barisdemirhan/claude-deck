@@ -1,10 +1,10 @@
 # Privacy
 
-What the Deck mod for Claude Code does with data. Last changed on 5 October 2026.
+What the Deck mod for Claude Code does with data. Last changed on 6 October 2026.
 
 ## Out of the box
 
-Nothing leaves your machine. The mod makes no network request, and has no server, no account and no analytics. Nothing is sent to the author of this mod. It reads no files, writes none and runs no processes.
+Nothing leaves your machine. The mod makes no network request, and has no server, no account and no analytics. Nothing is sent to the author of this mod. It reads no files, writes none and runs no processes. One setting you can turn on changes that, **GitHub checks**: see [What you turn on](#what-you-turn-on).
 
 It reads more of Claude's work than a mod usually does, to name the rows of its pane:
 
@@ -38,11 +38,22 @@ What `/deck` answers is a row of the conversation, as any command's output is, a
 
 With **Tool for Claude** on (it is off until you turn it on), Claude can call the mod's `plan` and `step` tools. What Claude sends them, a job's title and its steps, is kept in the session's memory as a run. What they answer goes into the conversation: the steps Claude itself sent, each with its id, and how many are done.
 
+With **GitHub checks** on, what `/deck watch` and the `watch` tool answer goes into the conversation: the title of the pull request or the workflow run, how many checks are over, the page's address, or the first line of an error from `gh` or GitHub. The prompt the mod submits for a watch with `wake` carries the same title and address, how many checks passed and failed, and the failed checks' names.
+
 ## What you turn on
 
 Each of these is off until you turn it on in the plugin's settings:
 
 - **Tool for Claude** lists the `plan` and `step` tools for Claude, as told above.
+- **GitHub checks** follows the checks of a pull request, a workflow run, a branch or a commit on GitHub, for `/deck watch` and for a `watch` tool it lists for Claude. It is the one thing that makes the mod run a process or a network request.
+
+  What it reads: the address of the session's `origin` remote, for the repository's host and name; for a watch with no target, the name of the branch you are on; and of GitHub's answers a pull request's title, a workflow run's name, title and state, and each check's, job's and step's name, state and times. These are kept in the session's memory as a run, as a plan's steps are.
+
+  What it sends, and only while something is watched: questions to GitHub's API, read only, every 15 seconds, each naming the repository and the pull request, workflow run, branch or commit. Where the `gh` command is installed and signed in, the mod runs `gh api` and `gh` makes the request with its own sign-in, to the host of your remote or of the address you gave; the mod sees no token. Where it is not, the mod requests `https://api.github.com` itself, and no other host; if `GH_TOKEN` or `GITHUB_TOKEN` is set it reads that token and sends it as the request's authorization, to that host alone, and keeps it nowhere. GitHub is run by GitHub, Inc.; its [privacy statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement) covers what it keeps of a request. Nothing goes to the author of this mod.
+
+  What stops it: `/deck unwatch`, `/deck close`, the checks' end, the session's end, or the setting turned off. A watch also ends by itself after three hours.
+
+  What it adds to Claude's work: one fixed note saying the `watch` tool is there, placed as the note of Tool for Claude is, with its words in the README; and for a watch Claude asked to be woken for, one prompt the mod submits when the checks are over.
 
 ## Taking your data off
 

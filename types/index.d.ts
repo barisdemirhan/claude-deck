@@ -67,8 +67,8 @@ export type Step = {
   endedAt: number
 }
 
-/** Which feed a run comes from: Claude Code's task list, or the mod's tool. */
-export type RunFeed = 'tasks' | 'plan'
+/** Which feed a run comes from: Claude Code's task list, the mod's tool, or GitHub's checks. */
+export type RunFeed = 'tasks' | 'plan' | 'checks'
 
 /** One job's steps, in the order they were planned. */
 export type Run = {
@@ -84,6 +84,28 @@ export type Run = {
   touchedAt: number
   /** When the agent that opened it ended with steps left; 0 while it can still move. */
   stoppedAt: number
+}
+
+/** One thing followed on GitHub, shown as a run: a commit's checks, or a workflow run's jobs. */
+export type Watch = {
+  /** The run that shows it, by id. */
+  run: string
+  kind: 'ref' | 'run'
+  /** The GitHub host, `github.com` or a company's own. */
+  host: string
+  /** `owner/name`. */
+  repo: string
+  /** A branch, a tag, a commit or `pull/12/head`; for a workflow run, its id. */
+  target: string
+  /** Its page on GitHub. */
+  url: string
+  /** True where Claude asked to be told when it is over. */
+  wake: boolean
+  startedAt: number
+  /** How many polls in a row found every check over. */
+  settled: number
+  /** How many polls in a row GitHub did not answer. */
+  failures: number
 }
 
 export type Switches = {
@@ -102,6 +124,8 @@ declare module 'claude-code' {
       now: number
       switches: Switches
       runs: Run[]
+      /** What is followed on GitHub, with the GitHub checks setting on. */
+      watches: Watch[]
       /** How long each of the last shell commands ran, by its call's id, for the transcript's rows. */
       spans: Record<string, number>
       /** The branches the person folded or unfolded, by `run/step`: true is open. */

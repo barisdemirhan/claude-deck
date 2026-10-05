@@ -1,8 +1,27 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register } from 'claude-code'
 
-import type { Job, JobStatus, Meter, Run } from '../types'
+import type { Job, JobStatus, Meter, Run, Watch } from '../types'
 
+import {
+  GITHUB,
+  MAX_WATCHES,
+  POLL_ANON_MS,
+  POLL_MS,
+  checksOf,
+  givenUp,
+  homeOf,
+  isSame,
+  pathsOf,
+  polled,
+  pullPath,
+  pullTitle,
+  startText,
+  summaryOf,
+  targetOf,
+  watched,
+} from './checks'
+import type { Found } from './checks'
 import {
   LEVELS,
   NO_METER,
@@ -22,6 +41,7 @@ import {
   activeOf,
   isLive,
   newsOf,
+  opened,
   stopped,
   swept,
   leavesOf,
@@ -37,7 +57,7 @@ import {
   taskCreated,
   taskUpdated,
 } from './runs'
-import { NOTE, NOTE_SECTION, TOOLS, WORDS } from './tools'
+import { NOTE, NOTE_SECTION, TOOLS, WATCH_NOTE, WATCH_SECTION, WATCH_TOOL, WORDS } from './tools'
 import { isRecord, toText } from './values'
 import { GLYPHS, jobSpan, labelText, spanText } from './view'
 import {
@@ -71,7 +91,14 @@ const TICK_MS = 1000
 const FOLLOW_TICKS = 2
 const CLOSE_WORDS = ['close', 'exit', 'quit']
 const USAGE =
-  'Usage: /deck (opens or closes the pane) · /deck open · /deck clear (takes what is over out of the pane) · /deck row (the label as a row, or as text) · /deck close (takes the deck away in every session)'
+  'Usage: /deck (opens or closes the pane) · /deck open · /deck clear (takes what is over out of the pane) · /deck row (the label as a row, or as text) · /deck watch [a pull request, a workflow run, a branch or a commit] (follows its GitHub checks) · /deck unwatch · /deck close (takes the deck away in every session)'
+const CHECKS_OFF =
+  'GitHub checks are off. Turn on "GitHub checks" in /config, under the plugin\'s name, to follow them in the deck.'
+/** How long one question to GitHub may take. */
+const ASK_MS = 20 * 1000
+/** `gh` ends with this where nobody is signed in to the host. */
+const GH_NO_AUTH = 4
+const ERROR_CHARS = 160
 /** What is over leaves the pane by itself after this long. */
 const STALE_MS = 30 * 60 * 1000
 const SWEEP_TICKS = 60
@@ -88,6 +115,8 @@ const NO_RUNS: Run[] = []
 const NO_FOLDS: Record<string, boolean> = {}
 const runs = atom({ plugin: 'deck', key: 'runs' } as const, NO_RUNS)
 const folds = atom({ plugin: 'deck', key: 'folds' } as const, NO_FOLDS)
+const NO_WATCHES: Watch[] = []
+const watches = atom({ plugin: 'deck', key: 'watches' } as const, NO_WATCHES)
 const NO_SPANS: Record<string, number> = {}
 const spans = atom({ plugin: 'deck', key: 'spans' } as const, NO_SPANS)
 /** How many shell commands' lengths are kept for the transcript's rows. */
@@ -101,8 +130,21 @@ const labelOf = (options: Readonly<Record<string, unknown>>): Label =>
 const isClosed = async ($: EngineInterface): Promise<boolean> =>
   (await read($, switches)).isClosed
 
+/** True while the pane is drawn. One that waits undrawn, opened where it had no room, is not up. */
 const isPaneUp = async ($: EngineInterface): Promise<boolean> =>
-  (await $.ui.panes().catch(() => [])).some((pane) => pane.id === PANE)
+  (await $.ui.panes().catch(() => [])).some((pane) => pane.id === PANE && pane.isPlaced)
+
+/**
+ * Opens the pane, and says why where Claude Code keeps it waiting undrawn,
+ * so a press that opened nothing is not silent.
+ */
+const paneOpened = async ($: EngineInterface): Promise<void> => {
+  const answer = await $.ui.open(PANE_OPEN)
+
+  if (!answer.isPlaced) {
+    $.ui.toast(`Deck's pane waits: ${answer.reason}`)
+  }
+}
 
 /**
  * Keeps `/deck close` or its undoing for every session and takes it up here
@@ -118,6 +160,7 @@ const closedAs = async ($: EngineInterface, isOff: boolean): Promise<void> => {
   if (isOff) {
     await $.ui.close({ id: PANE }).catch(() => undefined)
     await update($, meter, (kept) => held(kept, ''))
+    await update($, watches, () => [])
   }
 }
 
@@ -150,8 +193,10 @@ const rowClosedAs = async ($: EngineInterface, isOff: boolean): Promise<void> =>
 
 /** A press on a transcript row: the pane opens with that command's row open. */
 const shown = async ($: EngineInterface, id: string): Promise<void> => {
+  // The pane first, while the press is what asks for it.
+  const opening = paneOpened($)
   await update($, folds, (kept) => ({ ...kept, [`job:${id}`]: true }))
-  await $.ui.open(PANE_OPEN)
+  await opening
 }
 
 /** Opens the pane, or closes the open one. Resolves whether it is open now. */
@@ -162,7 +207,7 @@ const toggled = async ($: EngineInterface): Promise<boolean> => {
     return false
   }
 
-  await $.ui.open(PANE_OPEN)
+  await paneOpened($)
 
   return true
 }
@@ -269,6 +314,14 @@ type Session = {
   hasTool: boolean
   hasToasts: boolean
   hasRows: boolean
+  hasChecks: boolean
+  /** How GitHub is asked: by `gh`, or directly where the first try found no `gh` signed in. */
+  via: 'untried' | 'gh' | 'http'
+  /** True where GitHub is asked directly with no token, and answers few requests an hour. */
+  isAnon: boolean
+  /** When the watches were last polled, and whether a poll is under way. */
+  polledAt: number
+  isPolling: boolean
 }
 
 /** A toast, where the person left them on. */
@@ -289,6 +342,228 @@ const moved = async (
 
   for (const line of newsOf(before, after)) {
     told($, session, line)
+  }
+}
+
+/** The first free id for a new run: `r1`, `r2`. */
+const freeId = (all: readonly Run[], at: number): string => {
+  const taken = all.map((one) => one.id)
+  const free = Array.from({ length: taken.length + 1 }, (_, index) => `r${index + 1}`)
+
+  return free.find((id) => !taken.includes(id)) ?? `r${at}`
+}
+
+/** What GitHub answered to one path of its API, or why there is no answer. */
+type Answer = { data: unknown; error?: undefined } | { error: string; data?: undefined }
+
+const parsed = (text: string): Answer => {
+  try {
+    return { data: JSON.parse(text) as unknown }
+  } catch {
+    return { error: 'GitHub answered something that is not JSON.' }
+  }
+}
+
+const errorOf = (text: string): string =>
+  (text.trim().split('\n').find((line) => line.trim() !== '') ?? '').slice(0, ERROR_CHARS)
+
+/**
+ * Asks GitHub's API for one path, read only. By `gh api` where the machine
+ * has `gh` signed in, so the mod holds no token. Else directly, and only
+ * `github.com`: with the token `GH_TOKEN` or `GITHUB_TOKEN` names where one
+ * is set, with none for a public repository.
+ */
+const asked = async ($: EngineInterface, session: Session, host: string, path: string): Promise<Answer> => {
+  if (session.via !== 'http') {
+    const ran = await $.process
+      .run(['gh', 'api', '--hostname', host, path], { timeoutMs: ASK_MS })
+      .catch(() => undefined)
+    const isMissing = ran === undefined || ran.exitCode === GH_NO_AUTH
+
+    if (ran !== undefined && ran.exitCode === 0) {
+      session.via = 'gh'
+
+      return parsed(ran.stdout)
+    }
+
+    if (!isMissing || session.via === 'gh') {
+      return { error: errorOf(ran?.stderr ?? '') || 'gh did not answer.' }
+    }
+
+    session.via = 'http'
+  }
+
+  if (host !== GITHUB) {
+    return { error: `Checks on ${host} need the gh command, signed in to it.` }
+  }
+
+  const token = (await $.env.get('GH_TOKEN')) ?? (await $.env.get('GITHUB_TOKEN')) ?? ''
+  session.isAnon = token === ''
+  const answer = await $.http
+    .fetch(`https://api.github.com/${path}`, {
+      headers: {
+        accept: 'application/vnd.github+json',
+        ...(token === '' ? {} : { authorization: `Bearer ${token}` }),
+      },
+    })
+    .catch(() => undefined)
+
+  if (answer === undefined) {
+    return { error: 'GitHub could not be reached.' }
+  }
+
+  if (!answer.ok) {
+    return {
+      error: `GitHub answered ${answer.status}.${token === '' ? ' With no gh signed in and no GH_TOKEN, only a public repository answers.' : ''}`,
+    }
+  }
+
+  return parsed(answer.text)
+}
+
+/** One poll of what a watch follows: its checks, or why GitHub gave none. */
+const looked = async (
+  $: EngineInterface,
+  session: Session,
+  watch: Pick<Watch, 'kind' | 'host' | 'repo' | 'target'>,
+): Promise<Found | { error: string }> => {
+  const [first, second] = pathsOf(watch)
+  const one = await asked($, session, watch.host, first)
+
+  if (one.error !== undefined) {
+    return { error: one.error }
+  }
+
+  const other = await asked($, session, watch.host, second)
+
+  return other.error === undefined ? checksOf(watch.kind, one.data, other.data) : { error: other.error }
+}
+
+/**
+ * Starts following what the words name, for `/deck watch` and the watch
+ * tool: asks GitHub once, shows the answer as a run, and keeps asking while
+ * a check is left. Resolves what to answer, and whether nothing was shown.
+ */
+const watching = async (
+  $: EngineInterface,
+  session: Session,
+  words: string,
+  wake: boolean,
+): Promise<{ text: string; isRefused: boolean }> => {
+  const home = homeOf((await $.session.repo().catch(() => null))?.remote)
+  // With no words, the branch the session is on.
+  const branch =
+    words.trim() === ''
+      ? ((await $.process.run(['git', 'rev-parse', '--abbrev-ref', 'HEAD']).catch(() => undefined))?.stdout ?? '')
+      : ''
+  const target = targetOf(words, home, branch)
+
+  if ('error' in target) {
+    return { text: target.error, isRefused: true }
+  }
+
+  const all = await read($, watches)
+  const twin = all.find((one) => isSame(one, target))
+
+  if (twin !== undefined) {
+    await update($, watches, (kept) =>
+      kept.map((one) => (one.run === twin.run ? { ...one, wake: one.wake || wake } : one)),
+    )
+
+    return {
+      text: `It is shown in the Deck already.${wake ? ' A message will tell you when its checks are over.' : ''}`,
+      isRefused: false,
+    }
+  }
+
+  if (all.length >= MAX_WATCHES) {
+    return { text: `The Deck follows ${MAX_WATCHES} at a time, and it does now.`, isRefused: true }
+  }
+
+  const found = await looked($, session, target)
+
+  if ('error' in found) {
+    return { text: `Nothing is shown: ${found.error}`, isRefused: true }
+  }
+
+  const pull = target.pull > 0 ? await asked($, session, target.host, pullPath(target)) : undefined
+  const at = await $.clock.now()
+  const id = freeId(await read($, runs), at)
+  const title = pull?.data === undefined ? target.title : pullTitle(target, pull.data)
+  const run = watched(runOf(id, title, 'checks', `watch:${id}`, '', [], at), found, at)
+  const next = polled(
+    { run: id, kind: target.kind, host: target.host, repo: target.repo, target: target.target, url: target.url, wake, startedAt: at, settled: 0, failures: 0 },
+    found,
+  )
+  await update($, runs, (kept) => opened(kept, run))
+
+  if (next === undefined) {
+    return { text: summaryOf(run, target.url), isRefused: false }
+  }
+
+  session.polledAt = at
+  await update($, watches, (kept) => [...kept, next])
+
+  return { text: startText(run, target.url, wake), isRefused: false }
+}
+
+/** Every watch ends here: its run stops where it stands. */
+const unwatched = async ($: EngineInterface): Promise<number> => {
+  const all = await read($, watches)
+  const at = await $.clock.now()
+  await update($, watches, () => [])
+  await update($, runs, (kept) =>
+    kept.map((run) =>
+      all.some((watch) => watch.run === run.id) && isLive(run) ? { ...run, stoppedAt: at, touchedAt: at } : run,
+    ),
+  )
+
+  return all.length
+}
+
+/**
+ * One poll of every watch. A watch whose row was cleared away ends; one
+ * whose checks are over ends, and tells Claude where Claude asked; one that
+ * cannot go on is given up, its run stopped where it stands.
+ */
+const polledAll = async ($: EngineInterface, session: Session): Promise<void> => {
+  for (const watch of await read($, watches)) {
+    const run = (await read($, runs)).find((one) => one.id === watch.run)
+    const found = run === undefined ? undefined : await looked($, session, watch)
+    const at = await $.clock.now()
+
+    if (run === undefined || found === undefined) {
+      await update($, watches, (kept) => kept.filter((one) => one.run !== watch.run))
+      continue
+    }
+
+    const isAnswered = !('error' in found)
+    const current = isAnswered ? watched(run, found, at) : run
+    const next = isAnswered ? polled(watch, found) : { ...watch, failures: watch.failures + 1 }
+    const why = next === undefined ? undefined : givenUp(next, current, at)
+
+    if (isAnswered) {
+      await moved($, session, (kept) => kept.map((one) => (one.id === watch.run ? watched(one, found, at) : one)))
+    }
+
+    if (next !== undefined && why === undefined) {
+      await update($, watches, (kept) => kept.map((one) => (one.run === watch.run ? { ...next, wake: one.wake } : one)))
+      continue
+    }
+
+    const wake = (await read($, watches)).find((one) => one.run === watch.run)?.wake ?? watch.wake
+    await update($, watches, (kept) => kept.filter((one) => one.run !== watch.run))
+
+    if (why !== undefined) {
+      await update($, runs, (kept) =>
+        kept.map((one) => (one.id === watch.run && isLive(one) ? { ...one, stoppedAt: at, touchedAt: at } : one)),
+      )
+      told($, session, `${GLYPHS.killed} ${current.title}: ${why}`)
+    }
+
+    if (wake) {
+      await $.prompt.submit({ text: summaryOf(current, watch.url, why) }).catch(() => undefined)
+    }
   }
 }
 
@@ -367,6 +642,20 @@ const ticked = async ($: EngineInterface, session: Session): Promise<void> => {
     const at = await $.clock.now()
     await update($, now, () => at)
   }
+
+  // Last, so a slow answer of GitHub holds nothing above: what is watched is
+  // polled, one poll at a time.
+  if (session.hasChecks && !session.isPolling && (await read($, watches)).length > 0) {
+    const at = await $.clock.now()
+
+    if (at - session.polledAt >= (session.isAnon ? POLL_ANON_MS : POLL_MS)) {
+      session.polledAt = at
+      session.isPolling = true
+      await polledAll($, session).finally(() => {
+        session.isPolling = false
+      })
+    }
+  }
 }
 
 export const register: Register = (on, options) => {
@@ -378,13 +667,23 @@ export const register: Register = (on, options) => {
     hasTool: options.modelTool === true,
     hasToasts: options.toasts !== false,
     hasRows: options.transcriptRows !== false,
+    hasChecks: options.github === true,
+    via: 'untried',
+    isAnon: false,
+    polledAt: 0,
+    isPolling: false,
   }
+  // What tells an agent of the mod's tools, by the settings that are on.
+  const notes = [
+    ...(session.hasTool ? [{ id: NOTE_SECTION, text: NOTE }] : []),
+    ...(session.hasChecks ? [{ id: WATCH_SECTION, text: WATCH_NOTE }] : []),
+  ]
 
   on('session.start', async ($, e, next) => {
     await $.command.register({
       name: 'deck',
       description: 'A pane for the work behind the conversation: shells, agents, the model and its effort',
-      argumentHint: '[open|clear|row|close]',
+      argumentHint: '[open|clear|row|watch|unwatch|close]',
     })
     await followed($)
 
@@ -392,6 +691,10 @@ export const register: Register = (on, options) => {
       for (const tool of TOOLS) {
         await $.tool.register(tool)
       }
+    }
+
+    if (session.hasChecks) {
+      await $.tool.register(WATCH_TOOL)
     }
 
     const usage = await $.session.usage().catch(() => undefined)
@@ -426,16 +729,46 @@ export const register: Register = (on, options) => {
       await update($, work, (kept) => cleared(kept))
       await update($, runs, () => [])
       await update($, folds, () => ({}))
+      await update($, watches, () => [])
     }
 
     return next(e)
   })
 
   on('command.run', { command: 'deck' }, async ($, e) => {
-    const [first = '', ...rest] = e.args.trim().toLowerCase().split(/\s+/)
+    const [word = '', ...rest] = e.args.trim().split(/\s+/)
+    const first = word.toLowerCase()
+
+    // `/deck watch`, with what to follow or with nothing for the branch the
+    // session is on. Its answer names what is shown.
+    if (first === 'watch' && rest.length <= 1) {
+      if (!session.hasChecks) {
+        return { text: CHECKS_OFF }
+      }
+
+      if (await isClosed($)) {
+        return { text: 'Deck is closed. /deck brings it back.' }
+      }
+
+      const answer = await watching($, session, rest[0] ?? '', false)
+
+      if (!answer.isRefused) {
+        await $.ui.open(PANE_OPEN)
+      }
+
+      return { text: answer.text }
+    }
 
     if (rest.length > 0) {
       return { text: USAGE }
+    }
+
+    if (first === 'unwatch') {
+      const count = session.hasChecks ? await unwatched($) : 0
+
+      return {
+        text: count === 0 ? 'Deck follows nothing on GitHub.' : 'Deck stopped following GitHub: the runs stay where they stood.',
+      }
     }
 
     if (CLOSE_WORDS.includes(first)) {
@@ -615,10 +948,8 @@ export const register: Register = (on, options) => {
       }
 
       const at = await $.clock.now()
-      const taken = (await read($, runs)).map((one) => one.id)
-      const free = Array.from({ length: taken.length + 1 }, (_, index) => `r${index + 1}`)
       const made = runOf(
-        free.find((id) => !taken.includes(id)) ?? `r${at}`,
+        freeId(await read($, runs), at),
         toText(e.title),
         'plan',
         e.agentId ?? '',
@@ -676,9 +1007,24 @@ export const register: Register = (on, options) => {
     })
   }
 
-  // With Tool for Claude on, the main thread's system prompt gains one
-  // section saying the tools are there; every other section stays as it is.
-  if (session.hasTool) {
+  // With GitHub checks on, one more tool: what it is given is followed on
+  // GitHub and shown as a run.
+  if (session.hasChecks) {
+    on('tool.call', { tool: 'mcp__deck__watch' }, async ($, e) => {
+      if (await isClosed($)) {
+        return { result: 'The person closed the deck: nothing is shown. Wait for the checks yourself.' }
+      }
+
+      const answer = await watching($, session, toText(e.target), e.wake === true)
+
+      return answer.isRefused ? { deny: answer.text } : { result: answer.text }
+    })
+  }
+
+  // With Tool for Claude or GitHub checks on, the main thread's system prompt
+  // gains a section for each saying its tools are there; every other section
+  // stays as it is.
+  if (notes.length > 0) {
     on('prompt.compose', async ($, e, next) => {
       const answer = await next(e)
 
@@ -686,8 +1032,8 @@ export const register: Register = (on, options) => {
         ? answer
         : {
             sections: [
-              ...answer.sections.filter((section) => section.id !== NOTE_SECTION),
-              { id: NOTE_SECTION, text: NOTE, scope: 'session' as const },
+              ...answer.sections.filter((section) => !notes.some((note) => note.id === section.id)),
+              ...notes.map((note) => ({ ...note, scope: 'session' as const })),
             ],
           }
     })
@@ -696,10 +1042,12 @@ export const register: Register = (on, options) => {
   // A subagent as it starts: its type and the few words its call names the
   // task with. Its task goes on as it came, but for the line below.
   on('agent.spawn', async ($, e, next) => {
-    // With Tool for Claude on, one line at the end of the subagent's task says
-    // the tools are there. A fork has the main thread's prompt, which says so.
-    const isTold = session.hasTool && !e.fork && !(await isClosed($))
-    const answer = await next(isTold ? { ...e, prompt: `${e.prompt}\n\n${NOTE}` } : e)
+    // With Tool for Claude or GitHub checks on, a line each at the end of the
+    // subagent's task says the tools are there. A fork has the main thread's
+    // prompt, which says so.
+    const isTold = notes.length > 0 && !e.fork && !(await isClosed($))
+    const said = notes.map((note) => note.text).join('\n\n')
+    const answer = await next(isTold ? { ...e, prompt: `${e.prompt}\n\n${said}` } : e)
 
     if (answer.agentId !== undefined && !(await isClosed($))) {
       const id = answer.agentId

@@ -6,5 +6,6 @@ declare module 'claude-code' {
   interface McpToolInputs {
     mcp__deck__plan: { title: string; steps: string }
     mcp__deck__step: { id: string; state: string; run?: string }
+    mcp__deck__watch: { target?: string; wake?: boolean }
   }
 }

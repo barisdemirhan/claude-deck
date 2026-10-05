@@ -124,6 +124,19 @@ A pass over what a day of additions had left, taking out what earned no place:
 - **The label shares a row** another mod drew under the hint line, has a close mark, and draws the effort in its level's color.
 - **The model follows `/model`** within two seconds; usage comes from Claude Code's own measure event.
 
+## 0.8
+
+**GitHub checks**, a setting that defaults to off: the deck follows the checks of a pull request, a workflow run, a branch or a commit, and shows them as a run. It came from one case, an agent that ends its answer with "the CI is running again; I will merge when it passes", and is built for any check GitHub lists.
+
+- **A watch is a run** of a third feed, `checks`: a check is a step, and a workflow run's jobs have their steps under them. So the tree, the folds, the label's count, the toasts and the clearing are the ones a plan has, and the pane gained no section.
+- **Two questions a poll, the same for every target.** A pull request is asked for as the commit `pull/N/head`, so it, a branch and a commit are one case: the commit's check runs, and its statuses, which is where services outside Actions report. A workflow run is the other: the run, and its jobs.
+- **`gh api` first, the API itself second.** The answers are GitHub's REST JSON either way, so one reader serves both. With `gh` the mod holds no token and any host `gh` is signed in to works. Without it the mod asks `api.github.com` alone, with `GH_TOKEN` or `GITHUB_TOKEN` where set: a token of the environment must not go to a host an address names.
+- **Over means over twice** for a commit's checks: a workflow that starts after another ends adds its checks late, and one poll between the two would call it done.
+- **`wake`**: the tool's one switch. The deck submits a prompt when the checks are over, so the agent that asked ends its turn and leaves no shell polling. Without it an agent has no reason to call the tool over `gh pr checks --watch`.
+- **Not built**: starting a watch by itself from a `git push` or a `gh pr create` the deck sees. The command's first line is read already, but which push has checks worth a row is the agent's to know.
+
+Also in 0.8: a pane that Claude Code keeps waiting undrawn (opened where it had no room) is no longer taken for an open one. A press on the label closed such a pane, the next opened it to wait again, and nothing was drawn or said. Now the press opens it, and a toast gives Claude Code's reason where it still waits. A press on a transcript row asks for the pane before anything else.
+
 ## Checked
 
 Both on 2026-10-05 with Claude Code 2.1.289: a throwaway mod that logged every event under `claude -p`, then 0.1 itself in an interactive session.

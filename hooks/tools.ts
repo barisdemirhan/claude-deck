@@ -1,4 +1,4 @@
-// The two tools the model can call, for a person who turned them on. Here
+// The tools the model can call, for a person who turned them on. Here
 // only as the model reads them: the hooks module serves them. Their words
 // are in every request's context, so they are kept short.
 
@@ -51,3 +51,30 @@ export const TOOLS: readonly ToolSpec[] = [
     },
   },
 ]
+
+/**
+ * What tells an agent the watch tool is there, with the GitHub checks
+ * setting on: beside the note above, or alone.
+ */
+export const WATCH_NOTE =
+  'When you wait on GitHub checks (the CI of a pull request, a deploy or any other workflow run, the checks of a branch you pushed), call mcp__deck__watch once in place of polling in a shell (load it with ToolSearch if its schema is not loaded): the person follows each check in the Deck, and with wake you get a message when they are over.'
+
+/** The watch note's id among the system prompt's sections. */
+export const WATCH_SECTION = 'deck:watch'
+
+export const WATCH_TOOL: ToolSpec = {
+  name: 'watch',
+  description:
+    "Shows GitHub checks to the person in the Deck as they run: a pull request's CI, a workflow run's jobs (a deploy), a branch's or a commit's checks. Call it once after you push, open a pull request or start a deploy, in place of polling. With wake, a message tells you when they are over, so you can end your turn.",
+  inputSchema: {
+    type: 'object',
+    properties: {
+      target: {
+        type: 'string',
+        description:
+          'A pull request (12, #12 or its address), a workflow run (its id or address), a branch or a commit. Leave out for the branch you are on',
+      },
+      wake: { type: 'boolean', description: 'True to be told when the checks are over' },
+    },
+  },
+}

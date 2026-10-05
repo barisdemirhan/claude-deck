@@ -54,6 +54,55 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
   const toasts: string[] = []
   const stops: string[] = []
   const tasks = { count: 0, prompts: [] as string[] }
+  // Whether Claude Code draws a pane it is asked to open, or keeps it waiting.
+  const seat = { isPlaced: true }
+  // GitHub, as `gh api` and the API itself answer it: each path's JSON, the
+  // paths asked each way, and what the mod submitted as a prompt.
+  const github = {
+    hasGh: true,
+    answers: {} as Record<string, unknown>,
+    asked: [] as string[],
+    fetched: [] as { url: string; token: string }[],
+    submitted: [] as string[],
+    remote: 'git@github.com:acme/shop.git' as string | null,
+    env: {} as Record<string, string>,
+  }
+  const ran = (exitCode: number, stdout: string, stderr = '') => ({
+    value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false },
+  })
+
+  on('process.run', (_$, e) => {
+    if (e.argv[0] === 'git') {
+      return ran(0, 'main\n')
+    }
+
+    if (!github.hasGh) {
+      throw new Error('gh: command not found')
+    }
+
+    const path = e.argv.at(-1) ?? ''
+    const data = github.answers[path]
+    github.asked.push(`${e.argv[3]} ${path}`)
+
+    return data === undefined ? ran(1, '', 'gh: Not Found (HTTP 404)\n') : ran(0, JSON.stringify(data))
+  })
+  on('http.fetch', (_$, e) => {
+    const data = github.answers[e.url.replace('https://api.github.com/', '')]
+    github.fetched.push({ url: e.url, token: e.init?.headers?.authorization ?? '' })
+
+    return {
+      value: { status: data === undefined ? 404 : 200, ok: data !== undefined, headers: {}, text: JSON.stringify(data ?? {}) },
+    }
+  })
+  on('env.get', (_$, e) => ({ value: github.env[e.name] }))
+  on('session.repo', () => ({
+    value: github.remote === null ? null : { root: '/', remote: github.remote, internal: false, name: null },
+  }))
+  on('prompt.submit', (_$, e) => {
+    github.submitted.push(e.text)
+
+    return { text: e.text }
+  })
 
   on('store.get', (_$, e) => ({ value: store.get(e.key) }))
   on('store.set', (_$, e) => {
@@ -98,7 +147,7 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
   on('ui.open', (_$, e) => {
     panes.add(e.id)
 
-    return { value: { isPlaced: true } }
+    return { value: seat.isPlaced ? { isPlaced: true } : { isPlaced: false, reason: '120 columns, 144 needed' } }
   })
   on('ui.close', (_$, e) => {
     panes.delete(e.id)
@@ -111,7 +160,7 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
       title: id,
       isShown: true,
       isFocused: false,
-      isPlaced: true,
+      isPlaced: seat.isPlaced,
     })),
   }))
   on('ui.render', { component: 'PromptHint' }, ($, e) => {
@@ -198,6 +247,8 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
     stops,
     model,
     hint,
+    seat,
+    github,
   }
 }
 
@@ -1016,5 +1067,136 @@ test(
     expect(narrow).toEqual(expect.arrayContaining(['Fix the bug', '0/2']))
     expect(narrow).not.toContain('▱▱▱▱▱▱▱▱')
     expect(narrow).not.toContain('shell')
+  },
+)
+
+test('a pane that waits undrawn is not up: a press opens it again and says why it waits', async ($, on) => {
+  const { panes, seat, toasts } = world(on)
+  await $.session.start(SESSION)
+  seat.isPlaced = false
+
+  const ui = await $.ui.mount({ ...HINT, viewport: FULLSCREEN })
+  await ui.press({ key: 'deck' })
+  await ui.press({ key: 'deck' })
+  // Neither press closed it: the pane is still asked for.
+  expect([...panes]).toEqual(['deck'])
+  expect(toasts.at(-1)).toBe("Deck's pane waits: 120 columns, 144 needed")
+
+  seat.isPlaced = true
+  await ui.press({ key: 'deck' })
+  expect([...panes]).toEqual([])
+  await ui.unmount()
+})
+
+const CHECKS = 'repos/acme/shop/commits/pull%2F12%2Fhead/check-runs?per_page=100'
+const STATUSES = 'repos/acme/shop/commits/pull%2F12%2Fhead/status?per_page=100'
+const check = (name: string, status: string, conclusion: string | null = null) => ({
+  name,
+  status,
+  conclusion,
+  started_at: '2026-10-06T10:00:00Z',
+  completed_at: status === 'completed' ? '2026-10-06T10:01:30Z' : null,
+})
+
+test('with GitHub checks off, nothing is asked and no tool is listed', async ($, on) => {
+  const { tools, github } = world(on)
+  await $.session.start(SESSION)
+
+  expect(tools).toEqual([])
+  expect(await run($, 'watch 12')).toContain('GitHub checks are off')
+  expect(github.asked).toEqual([])
+})
+
+test(
+  'a watched pull request shows its checks as a run, follows them, and ends when they are over',
+  { options: { github: true } },
+  async ($, on) => {
+    const { clock, tools, toasts, github } = world(on)
+    await $.session.start(SESSION)
+    expect(tools).toEqual(['watch'])
+
+    github.answers[CHECKS] = { check_runs: [check('test', 'in_progress'), check('lint', 'completed', 'success')] }
+    github.answers[STATUSES] = { statuses: [{ context: 'deploy/preview', state: 'pending' }] }
+    github.answers['repos/acme/shop/pulls/12'] = { title: 'Fix the wallet' }
+
+    expect(await run($, 'watch #12')).toContain('"PR #12 · Fix the wallet" is shown in the Deck: 1 of 3 checks are over.')
+    expect(github.asked).toEqual([`github.com ${CHECKS}`, `github.com ${STATUSES}`, 'github.com repos/acme/shop/pulls/12'])
+    expect(await paneTexts($)).toEqual(
+      expect.arrayContaining(['PR #12 · Fix the wallet', '1/3', 'test', 'lint', 'deploy/preview']),
+    )
+    expect(await run($, 'watch 12')).toBe('It is shown in the Deck already.')
+
+    github.answers[CHECKS] = { check_runs: [check('test', 'completed', 'failure'), check('lint', 'completed', 'success')] }
+    github.answers[STATUSES] = { statuses: [{ context: 'deploy/preview', state: 'success' }] }
+    await clock.advance(16_000)
+    expect(toasts).toEqual(['✗ PR #12 · Fix the wallet: test failed'])
+
+    // Over on two polls in a row: the watch ends, and GitHub is asked no more.
+    await clock.advance(16_000)
+    const asked = github.asked.length
+    await clock.advance(60_000)
+    expect(github.asked.length).toBe(asked)
+    expect(github.submitted).toEqual([])
+  },
+)
+
+test(
+  'the watch tool follows a workflow run with its jobs and steps, and wakes Claude when it is over',
+  { options: { github: true } },
+  async ($, on) => {
+    const { clock, github } = world(on)
+    await $.session.start(SESSION)
+    const job = (status: string, conclusion: string | null, second: string) => ({
+      jobs: [
+        {
+          ...check('deploy', status, conclusion),
+          steps: [check('Build', 'completed', 'success'), check('Release', second, second === 'completed' ? 'success' : null)],
+        },
+      ],
+    })
+
+    github.answers['repos/acme/shop/actions/runs/37387841808'] = { name: 'Deploy', display_title: 'Ship 1.4', status: 'in_progress' }
+    github.answers['repos/acme/shop/actions/runs/37387841808/jobs?per_page=100'] = job('in_progress', null, 'in_progress')
+
+    const answer = await $.tool.call({ tool: 'mcp__deck__watch', target: '37387841808', wake: true })
+    expect(answer.result).toContain('"Deploy · Ship 1.4" is shown in the Deck: 1 of 2 checks are over. A message will tell you')
+    expect(await paneTexts($)).toEqual(expect.arrayContaining(['Deploy · Ship 1.4', 'deploy', 'Build', 'Release']))
+
+    github.answers['repos/acme/shop/actions/runs/37387841808'] = { name: 'Deploy', display_title: 'Ship 1.4', status: 'completed' }
+    github.answers['repos/acme/shop/actions/runs/37387841808/jobs?per_page=100'] = job('completed', 'success', 'completed')
+    await clock.advance(16_000)
+
+    expect(github.submitted).toEqual([
+      'The GitHub checks of "Deploy · Ship 1.4" are over: 2 passed, 0 failed.\nhttps://github.com/acme/shop/actions/runs/37387841808',
+    ])
+
+    const refused = await $.tool.call({ tool: 'mcp__deck__watch', target: '99' })
+    expect(refused.deny).toBe('Nothing is shown: gh: Not Found (HTTP 404)')
+  },
+)
+
+test(
+  'without gh, GitHub is asked directly, and a token goes to github.com alone',
+  { options: { github: true } },
+  async ($, on) => {
+    const { github } = world(on)
+    await $.session.start(SESSION)
+    github.hasGh = false
+    github.env.GH_TOKEN = 'secret'
+    github.answers['repos/acme/shop/commits/main/check-runs?per_page=100'] = { check_runs: [check('test', 'queued')] }
+    github.answers['repos/acme/shop/commits/main/status?per_page=100'] = { statuses: [] }
+
+    // With no words, the branch the session is on.
+    expect(await run($, 'watch')).toContain('"Checks · main" is shown in the Deck: 0 of 1 checks are over.')
+    expect(github.fetched).toEqual([
+      { url: 'https://api.github.com/repos/acme/shop/commits/main/check-runs?per_page=100', token: 'Bearer secret' },
+      { url: 'https://api.github.com/repos/acme/shop/commits/main/status?per_page=100', token: 'Bearer secret' },
+    ])
+
+    expect(await run($, 'watch https://git.corp.example/acme/shop/pull/3')).toBe(
+      'Nothing is shown: Checks on git.corp.example need the gh command, signed in to it.',
+    )
+    expect(github.fetched.length).toBe(2)
+    expect(await run($, 'unwatch')).toBe('Deck stopped following GitHub: the runs stay where they stood.')
   },
 )

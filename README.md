@@ -27,7 +27,8 @@ Nothing has to change. This repository is a marketplace of its own too, and `dec
 
 | Command | What it does |
 | --- | --- |
-| `/deck` | Opens the pane, or closes the open one. `/deck open` only opens it. It asks for 52 columns beside the conversation; a width you drag it to stands |
+| `/deck` | Opens the pane, or closes the open one. `/deck open` only opens it. It asks for 52 columns beside the conversation; a width you drag it to stands. Where Claude Code keeps the pane waiting undrawn, a toast says why |
+| `/deck watch` | With **GitHub checks** on, follows the checks of the branch you are on. `/deck watch 12` follows a pull request, and a workflow run's id, a branch, a commit or a page's address on GitHub works the same. `/deck unwatch` stops following; the runs stay where they stood. See [GitHub checks](#github-checks) |
 | `/deck clear` | Takes what is over out of the pane: the ended shells and agents, and the runs that finished or stopped. What still runs stays |
 | `/deck row` | Keeps the label as text on the hint line, or brings its row back. The row's `×` does the first. Every open session follows within two seconds |
 | `/deck close` | Takes the deck away in every open session within two seconds: the label, the pane, the reading of shell calls and the effort it set. `/deck exit` and `/deck quit` do the same; `/deck` brings it back |
@@ -92,6 +93,38 @@ Every agent of the session gets them with that one setting: the main thread and 
 
 The note also asks for the words you will read in the pane, a plan's title and steps and each shell command's description, in the language you write in. A tool's description alone does not do this: where many tools are installed, Claude Code lists most by name only, and an agent reads a description only after it loads the tool. You can still ask, "plan this in the deck". The one agent that cannot is one whose definition lists its `tools` and leaves these two out: Claude Code refuses it any other tool. Claude Code asks your permission for them as for any tool, and their descriptions take a little of every prompt's context, which is why they are off by default.
 
+### GitHub checks
+
+With **GitHub checks** on, the deck follows checks on GitHub and shows them as a run: the CI of a pull request, a deploy or any other workflow run, the checks of a branch or a commit.
+
+```
+▾ PR #12 · Fix the wallet            ▰▰▰▰▰▱▱▱ 3/5    4m 10s
+    ✓ lint                                              41s
+    ✓ unit                                           2m 03s
+    ⏵ e2e                                            3m 20s
+    ✗ deploy/preview                                    12s
+    ○ smoke
+```
+
+| You give | It follows |
+| --- | --- |
+| `12`, `#12`, or a pull request's address | That pull request's checks: its check runs, and the statuses other services set on its last commit |
+| A workflow run's id or address | That run's jobs, each with its steps under it |
+| A branch, a tag, a commit, or the address of one | The checks of that commit; for a branch, of its newest one |
+| Nothing | The branch the session is on |
+
+A number of eight digits or more is read as a workflow run's id, a shorter one as a pull request's. A check that was skipped, cancelled or timed out says so beside its name; a skipped one counts as passed.
+
+The deck asks GitHub every 15 seconds while something is followed, four things at most. A pull request's or a commit's checks are over once two polls in a row find each one over, since a later workflow may still add its own; a workflow run is over when GitHub says so. A watch is given up when no check shows up in ten minutes, after three hours, or when GitHub does not answer five times in a row: its run stops where it stands. A toast tells you of a failed check and of the end, as for any run.
+
+**How it asks.** With the [`gh`](https://cli.github.com) command installed and signed in, the deck runs `gh api` for each question, so it holds no token and a company's own GitHub host works. Where there is no `gh`, or nobody is signed in to it, it asks `api.github.com` directly: with the token in `GH_TOKEN` or `GITHUB_TOKEN` where one is set, and with none for a public repository, then every two and a half minutes, as GitHub answers a nameless caller 60 requests an hour. Every question is a read. A host other than `github.com` needs `gh`, and `gh` runs only where Claude Code runs commands for a mod, which is the terminal.
+
+**For Claude.** The same setting lists one tool, `watch`, with a note that tells every agent of the session it is there, added as the note of **Tool for Claude** is:
+
+> When you wait on GitHub checks (the CI of a pull request, a deploy or any other workflow run, the checks of a branch you pushed), call mcp__deck__watch once in place of polling in a shell (load it with ToolSearch if its schema is not loaded): the person follows each check in the Deck, and with wake you get a message when they are over.
+
+`watch` takes what to follow, as `/deck watch` does, and `wake`. With `wake`, the deck submits one prompt of its own when the checks are over or the watch is given up, which starts a turn: how many checks passed and failed, the failed ones by name, and the page's address. So Claude can push, call `watch`, end its turn, and merge when the word comes, with no shell left polling. Without `wake` you see the checks and Claude is told nothing.
+
 ### The effort meter
 
 `▰▰▰▱▱ high` is the effort the main thread's requests go out with, drawn in its level's color: low dim, medium green, high yellow, xhigh orange, max red. Press the level's name and it goes one step up: low, medium, high, xhigh, max, then low again. From the next request on, the deck sends that level in place of Claude Code's own, on the main thread only; a subagent keeps its own. The mark beside the meter is `⟳` while the deck sets the effort and `↑` while Claude Code does.
@@ -106,6 +139,7 @@ In Claude Code's `/config` menu, under the plugin's name:
 | --- | --- | --- |
 | Hint label | `button` | `button`: a row under the hint line with parts you can press, where there is a pointer, and text elsewhere. `text`: always at the end of the hint line. `off`: no label |
 | Tool for Claude | off | Lists the `plan` and `step` tools for Claude. See above |
+| GitHub checks | off | Follows checks on GitHub as a run: `/deck watch`, and the `watch` tool for Claude. See above |
 | Transcript rows | on | The rows under a group of tool calls in the conversation. See above |
 | Toasts | on | A toast when a background job fails or ends after half a minute, when a step fails and when a run finishes |
 
@@ -117,7 +151,7 @@ In Claude Code's `/config` menu, under the plugin's name:
 
 ## Privacy and data handling
 
-The mod registers one slash command, adds one label under the prompt, adds rows under the conversation's lines for groups of tool calls, and draws its pane when you open it. It reads no files, writes none and runs no processes. Out of the box it changes one thing of Claude's work, and only after you ask: the effort of the main thread's model requests, after a press on the meter. A press on a row's `■ stop` asks Claude Code to stop that one background task. With **Tool for Claude** on it changes one more: it adds the note quoted under that setting to the main thread's system prompt and to the end of each subagent's task. It never changes the prompt you type, a tool call or a tool's result.
+The mod registers one slash command, adds one label under the prompt, adds rows under the conversation's lines for groups of tool calls, and draws its pane when you open it. Out of the box it reads no files, writes none, runs no processes and makes no network request; with **GitHub checks** on it runs `gh` and `git`, or asks GitHub directly, as told below. Out of the box it changes one thing of Claude's work, and only after you ask: the effort of the main thread's model requests, after a press on the meter. A press on a row's `■ stop` asks Claude Code to stop that one background task. With **Tool for Claude** on it changes one more: it adds the note quoted under that setting to the main thread's system prompt and to the end of each subagent's task. **GitHub checks** adds its own note the same way, and for a watch Claude asked to be woken for, the deck submits one prompt of its own when the checks are over. It never changes the prompt you type, a tool call or a tool's result.
 
 **What it reads.** More than the other mods of this marketplace, which read no argument of a tool call:
 
@@ -130,18 +164,23 @@ The mod registers one slash command, adds one label under the prompt, adds rows 
 - Of the row Claude Code draws when a background task ends: the task's id, how it ended and how long it ran. Not the row's text.
 - When Claude stops: the ids of the background tasks still running.
 - From Claude Code: the main thread's model, how full the context window is, what the session cost and how full its rate limits are.
+- With **GitHub checks** on, when a watch starts: the address of the session's `origin` remote, for the repository's host and name, and for a watch with no target the name of the branch you are on. Of GitHub's answers: a pull request's title; a workflow run's name, title and state; each check's, job's and step's name, state and times. The names are cut to 80 characters and kept in memory as a run. With no `gh`, the value of `GH_TOKEN` or `GITHUB_TOKEN`, to send it to GitHub with each question.
 
 It reads nothing of a prompt's text, of any other tool's call, or of an answer.
 
-**What it sends.** Nothing. It makes no network request, and has no server, no account and no analytics.
+**What it sends.** Out of the box, nothing: it makes no network request. It has no server, no account and no analytics, and nothing goes to the author of this mod.
+
+With **GitHub checks** on, and only while something is watched, it asks GitHub, read only, every 15 seconds. What goes out is the question: the repository's owner and name, and the pull request's number, the workflow run's id, or the branch's or commit's name. With `gh`, the deck runs `gh api` and `gh` makes the request, to the host of your remote or of the address you gave, with the sign-in `gh` holds. Without `gh`, the deck itself requests `https://api.github.com`, and no other host, with `GH_TOKEN` or `GITHUB_TOKEN` as the request's authorization where one is set. `/deck unwatch`, `/deck close`, the checks' end or the session's end stops it; with the setting off it never starts. GitHub's own policy covers what it keeps of a request.
 
 **What reaches Claude.** What `/deck` answers is a row of the conversation, as any command's output is: one fixed sentence saying what the command did. No title of a shell, an agent or a step is in it. Out of the box the mod gives Claude no tool. With **Tool for Claude** on, it lists two, and what they answer goes into the conversation the same way: `plan` answers the steps Claude itself sent, each with its id, and `step` the step's id and how many are done.
+
+With **GitHub checks** on, what `/deck watch` answers names what is shown, with the pull request's or the workflow run's title, how many checks are over, and the page's address; an error of `gh` or of GitHub is answered as it came, cut to its first line. The `watch` tool answers the same to Claude. For a watch with `wake`, the prompt the deck submits carries the run's title, how many checks passed and failed, the failed checks' names and the page's address.
 
 **What it keeps.** On disk, in the plugin's own Claude Code store, one JSON file under `~/.claude/plugins/store/`: whether you closed the deck with `/deck close`, and whether you closed the label's row. Everything else, the rows' titles and times, the runs and their steps, what you folded, the model and the effort you set, is in the session's memory and gone with it.
 
 **Sound.** None.
 
-**Files and processes.** It reads no files, writes none and runs no processes.
+**Files and processes.** It reads no files and writes none. Out of the box it runs no processes. With **GitHub checks** on it runs two commands, each by its arguments with no shell: `gh api --hostname <host> <path>` for each question to GitHub, and `git rev-parse --abbrev-ref HEAD` once for a watch with no target.
 
 [PRIVACY.md](PRIVACY.md) is the same as a privacy policy, with what reaches Claude and how to take your data off.
 
@@ -149,19 +188,19 @@ It reads nothing of a prompt's text, of any other tool's call, or of an answer.
 
 Its hooks are in `hooks/register.tsx`:
 
-- `session.start` registers the `/deck` command (and with Tool for Claude on, the two tools) and starts the one-second tick that follows another session's `/deck close`, asks Claude Code for the main thread's model and moves the open pane's clock, then passes the event on unchanged.
+- `session.start` registers the `/deck` command (with Tool for Claude on, the two tools, and with GitHub checks on, `watch`) and starts the one-second tick that follows another session's `/deck close`, asks Claude Code for the main thread's model and moves the open pane's clock, then passes the event on unchanged. With GitHub checks on, the same tick polls what is watched.
 - `session.end` takes the runs and what is over out of the pane when `/clear` ends the conversation, and passes the event on unchanged.
 - `command.run` answers only the `/deck` command. Other commands never reach it.
-- `tool.call` on `Bash` notes the call's start, its title and its end; on `TaskStop` the task that was stopped; on `TaskCreate` and `TaskUpdate` the task and its state. Each passes the call on unchanged and answers what Claude Code answered. With Tool for Claude on, two more answer the mod's own `plan` and `step`. A press on `■ stop` raises one `TaskStop` call of the mod's own, for the task of that row. No other tool reaches any of them.
-- `agent.spawn` notes a subagent's type, task and id. It passes the spawn on unchanged; with Tool for Claude on, with the note added at the end of the subagent's task, a fork left out.
-- `prompt.compose`, hooked only with Tool for Claude on, adds the note as one section after the system prompt's own, which stay as they are.
+- `tool.call` on `Bash` notes the call's start, its title and its end; on `TaskStop` the task that was stopped; on `TaskCreate` and `TaskUpdate` the task and its state. Each passes the call on unchanged and answers what Claude Code answered. With Tool for Claude on, two more answer the mod's own `plan` and `step`, and with GitHub checks on one answers `watch`. A press on `■ stop` raises one `TaskStop` call of the mod's own, for the task of that row. No other tool reaches any of them.
+- `agent.spawn` notes a subagent's type, task and id. It passes the spawn on unchanged; with Tool for Claude or GitHub checks on, with that setting's note added at the end of the subagent's task, a fork left out.
+- `prompt.compose`, hooked only with Tool for Claude or GitHub checks on, adds each one's note as a section after the system prompt's own, which stay as they are.
 - `turn.complete` notes the end of a subagent's turn. It passes the event on unchanged.
 - `session.measure` reads Claude Code's own figures as they move: the context window's fill, the session's cost and the rate limits. It passes the event on unchanged.
 - `classic.Stop` reads which background tasks still run, and passes the event on unchanged.
 - `turn.step` reads the model and the effort of each request. For the main thread, while a level you set stands, it passes the request on with that effort; otherwise, and for every subagent's request, unchanged. It passes the response on as it streams.
 - `ui.render` adds the label to the end of the hint line, or where there is a pointer draws it as a row under the line, keeping the line and what other mods drew with it. It draws the deck's pane, and only that pane. Under a group of tool calls it adds the shell commands' rows after the group's own line, which it draws as it came; an expanded group it passes on untouched. On a background task's notification row it reads the task's fields and draws the row as it came.
 
-While the deck is closed with `/deck close`, each of these passes its event on without reading it, the two tools answer that no plan is shown, and the note is added nowhere.
+While the deck is closed with `/deck close`, each of these passes its event on without reading it, the tools answer that nothing is shown, the notes are added nowhere, and what was watched on GitHub is dropped.
 
 The files under `tests/` run only under `claude plugin test`, and are never loaded in a session.
 
@@ -179,6 +218,7 @@ claude --plugin-dir claude-deck
 - `hooks/work.ts`: the shells and agents, running and lately ended.
 - `hooks/meter.ts`: the model's name and the effort meter.
 - `hooks/runs.ts`: the runs, their steps and the rows they draw as.
+- `hooks/checks.ts`: GitHub's checks: what a watch follows, the API's answers as checks, and the checks as a run.
 - `hooks/tools.ts`: the tools Claude reads, as it reads them.
 - `hooks/view.ts`: the label's text and the times.
 - `hooks/pane.tsx`: the pane's drawing.
