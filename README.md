@@ -4,32 +4,7 @@ A pane beside the conversation in [Claude Code](https://claude.com/claude-code) 
 
 Type `/deck`, or press its mark, `◨`, under the prompt:
 
-```
- Fable 5.1  ▰▰▰▱▱ high ↑                          ctx ▰▰▱▱▱▱▱▱ 23%
- ──────────────────────────────────────────────────────────────
- SHELLS · 2
- ⏵ Typecheck, test and lint                              1m 12s
- ⏵ npm run dev                                           14m 03s
- ──────────────────────────────────────────────────────────────
- AGENTS · 1
- ⏵ general-purpose(Ship the release)                        48s
-   ⏵ Build the package                                      12s
- ──────────────────────────────────────────────────────────────
- ▾ Auth renewal                        ▰▰▰▰▰▱▱▱   5/8   12m 40s
-   ✓ Token rotation                               3/3    6m 02s
-   ▾ Session cleanup                              2/3    4m 11s
-     ✓ Move the old table                                1m 30s
-     ✓ Remove the cron                                      41s
-     ⏵ Update the tests                                  2m 00s
-   ○ Documentation                                0/2
- ──────────────────────────────────────────────────────────────
- ▸ Ship the release · general-purpose  ▰▰▰▰▰▰▱▱   3/4    3m 05s
- ▸ ✓ Parser refactor                   ▰▰▰▰▰▰▰▰   6/6    9m 17s
- ──────────────────────────────────────────────────────────────
- RECENT
- ✓ npm run build                                shell    2m 03s
- ✗ pytest -k auth                               shell        8s
-```
+<img src="docs/deck.png" width="604" alt="Deck's pane: the model with its effort meter, the context's fill, the session's cost and limits; two shells that run, one opened to its command with a stop button; an agent with the shell it started and the run it opened under it; a run as a tree with a finished branch folded; and the two commands that lately ended, one failed">
 
 ## Install
 
