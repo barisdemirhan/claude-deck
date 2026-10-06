@@ -14,6 +14,7 @@ import type {
 import type { Job, Meter, Work } from '../types'
 
 import {
+  LEVEL_CELLS,
   canStep,
   contextText,
   effortColor,
@@ -203,7 +204,7 @@ const head = (kit: Kit, view: PaneView): RenderElement => {
               <Button
                 key="effort"
                 plain
-                label={`${effortOf(meter)} ${isHeld(meter) ? '⟳' : '↑'}`}
+                label={`${effortOf(meter)} ${isHeld(meter) ? '⟳' : '↑'}`.padEnd(LEVEL_CELLS + 2)}
                 onPress={view.onEffort}
               />
             </Box>
@@ -430,8 +431,9 @@ export type LabelView = {
  * The label as a row of its own, where there is a pointer. It begins with
  * the deck's mark, a button that opens or closes the pane, as the run at its
  * end does. Between them the model's name is text, and its effort's level is
- * a button that steps it up as the pane's meter does. The effort's bar has
- * its level's color, what runs the color of a running row, a failure is red.
+ * a button that steps it up as the pane's meter does, as wide at every level
+ * as the longest level's name. The effort's bar has its level's color, what
+ * runs the color of a running row, a failure is red.
  */
 export const labelRow = (kit: Kit, view: LabelView): RenderElement => {
   const { Box, Text, Button } = kit
@@ -448,7 +450,12 @@ export const labelRow = (kit: Kit, view: LabelView): RenderElement => {
       )}
       {view.bar !== '' &&
         (view.canStep ? (
-          <Button key="deck-effort" plain label={view.level} onPress={view.onEffort} />
+          <Button
+            key="deck-effort"
+            plain
+            label={view.level.padEnd(LEVEL_CELLS)}
+            onPress={view.onEffort}
+          />
         ) : (
           <Text dimColor>{view.level}</Text>
         ))}

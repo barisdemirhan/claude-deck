@@ -127,7 +127,7 @@ The deck asks GitHub every 30 seconds while something is followed, four things a
 
 ### The effort meter
 
-`▰▰▰▱▱ high` is the effort the main thread's requests go out with, drawn in its level's color: low dim, medium green, high yellow, xhigh orange, max red. Press the level's name and it goes one step up: low, medium, high, xhigh, max, then low again. From the next request on, the deck sends that level in place of Claude Code's own, on the main thread only; a subagent keeps its own. The mark beside the meter is `⟳` while the deck sets the effort and `↑` while Claude Code does.
+`▰▰▰▱▱ high` is the effort the main thread's requests go out with, drawn in its level's color: low dim, medium green, high yellow, xhigh orange, max red. Press the level's name and it goes one step up: low, medium, high, xhigh, max, then low again. The name's button is as wide at every level as the longest name, so a pointer that stays where it pressed goes all the way round. From the next request on, the deck sends that level in place of Claude Code's own, on the main thread only; a subagent keeps its own. The mark beside the meter is `⟳` while the deck sets the effort and `↑` while Claude Code does.
 
 It lasts for the session, until one of these hands the effort back to Claude Code: `/effort` with another level, a step that lands on Claude Code's own level, or `/deck close`. A model that takes no effort setting shows no meter.
 

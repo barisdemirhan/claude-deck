@@ -264,6 +264,9 @@ const step = async ($: Engine, effort?: 'low' | 'high', agentId?: string): Promi
   }
 }
 
+/** A button's label as it reads: the cells that keep its width are left out. */
+const face = (label: unknown): string => String(label ?? '').trimEnd()
+
 /** The hint line's tail, as the terminal's main screen draws it. */
 const tail = async ($: Engine): Promise<string> => {
   const ui = await $.ui.mount(HINT)
@@ -405,11 +408,11 @@ test('a press on the meter sends the main thread\'s next requests at the next le
   await step($, 'high')
 
   const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
-  expect((await pane.find({ key: 'effort' }))?.props.label).toBe('high ↑')
+  expect(face((await pane.find({ key: 'effort' }))?.props.label)).toBe('high ↑')
   // The bar beside it is drawn in its level's color.
   expect((await pane.find({ type: 'Text', text: '▰▰▰▱▱' }))?.props.color).toBe('warning')
   await pane.press({ key: 'effort' })
-  expect((await pane.find({ key: 'effort' }))?.props.label).toBe('xhigh ⟳')
+  expect(face((await pane.find({ key: 'effort' }))?.props.label)).toBe('xhigh ⟳')
   expect((await pane.find({ type: 'Text', text: '▰▰▰▰▱' }))?.props.color).toBe('claude')
   await pane.unmount()
 
@@ -930,7 +933,7 @@ test(
       const ui = await $.ui.mount({ ...HINT, surface, viewport: FULLSCREEN })
       expect((await ui.find({ key: 'deck' }))?.props.label).toBe('◨')
       expect((await ui.find({ type: 'Text', text: '▰▰▰▱▱' }))?.props.color).toBe('warning')
-      expect((await ui.find({ key: 'deck-effort' }))?.props.label).toBe('high')
+      expect(face((await ui.find({ key: 'deck-effort' }))?.props.label)).toBe('high')
       expect((await ui.find({ key: 'deck-run' }))?.props.label).toBe('Fix the bug 0/2')
       expect((await ui.findAll({ type: 'Text' })).map((text) => text.text)).toEqual(
         expect.arrayContaining(['⏵ 1', '✗']),
@@ -1043,6 +1046,32 @@ test('a press on the effort in the label steps it up as the pane\'s meter does, 
   await step($, 'high')
   expect(efforts).toEqual(['high', 'max'])
   expect([...panes]).toEqual([])
+})
+
+test('the effort\'s button is as wide at every level, so the pointer that pressed it is still on it', async ($, on) => {
+  world(on)
+  await $.session.start(SESSION)
+  await step($, 'high')
+
+  const ui = await $.ui.mount({ ...HINT, viewport: FULLSCREEN })
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  const levels: string[] = []
+  const widths = { label: new Set<number>(), pane: new Set<number>() }
+
+  // Once round: high, xhigh, max, low, medium.
+  for (let press = 0; press < 5; press += 1) {
+    const label = String((await ui.find({ key: 'deck-effort' }))?.props.label)
+    levels.push(face(label))
+    widths.label.add(label.length)
+    widths.pane.add(String((await pane.find({ key: 'effort' }))?.props.label).length)
+    await ui.press({ key: 'deck-effort' })
+  }
+
+  await ui.unmount()
+  await pane.unmount()
+  expect(levels).toEqual(['high', 'xhigh', 'max', 'low', 'medium'])
+  expect([...widths.label]).toEqual(['medium'.length])
+  expect([...widths.pane]).toEqual(['medium ⟳'.length])
 })
 
 test(

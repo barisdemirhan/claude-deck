@@ -136,6 +136,8 @@ A pass over what a day of additions had left, taking out what earned no place:
 - **A watch does not wait for good** (0.8.1): it is given up when no check shows up in ten minutes, when none moves for half an hour, after two hours in all, or after five polls GitHub did not answer; a question to GitHub is cut at 20 seconds. Each end is told, to Claude too where it asked. A poll is every 30 seconds: 15 spent a tenth of an account's hourly requests on one watch.
 - **Not built**: starting a watch by itself from a `git push` or a `gh pr create` the deck sees. The command's first line is read already, but which push has checks worth a row is the agent's to know.
 
+- **The effort's button keeps its width** (0.8.2): the level's name is drawn as wide as the longest, `medium`, in the label and in the pane. It came from a report that the label stayed at `max` where the pane went on to `low`, with one function behind both. The reading, from the code and not yet seen in a live session: a button is pressed on its own cells alone, and the label's was the name, so from `xhigh` to `max` it lost two cells and a pointer on the name's fourth or fifth cell was then on nothing; the pane's button also holds the mark, and kept those cells. The engine's tests press by key, with no pointer, so they passed all along.
+
 Also in 0.8: a pane that Claude Code keeps waiting undrawn (opened where it had no room) is no longer taken for an open one. A press on the label closed such a pane, the next opened it to wait again, and nothing was drawn or said. Now the press opens it, and a toast gives Claude Code's reason where it still waits. A press on a transcript row asks for the pane before anything else.
 
 ## Checked

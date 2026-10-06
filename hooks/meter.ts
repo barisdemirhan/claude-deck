@@ -4,6 +4,14 @@ import type { Meter } from '../types'
 
 export const LEVELS = ['low', 'medium', 'high', 'xhigh', 'max']
 
+/**
+ * The longest level's name, in cells. A button that names the level is drawn
+ * this wide at every level: one that shrank from `xhigh` to `max` would leave
+ * the pointer that pressed it on the cells after it, and the next press on
+ * nothing.
+ */
+export const LEVEL_CELLS = Math.max(...LEVELS.map((level) => level.length))
+
 export const NO_METER: Meter = {
   model: '',
   effort: '',
