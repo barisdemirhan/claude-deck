@@ -46,11 +46,11 @@ export type PaneView = {
   runs: readonly (readonly Row[])[]
   /** The runs a running agent opened, by the agent's id: drawn under its row. */
   nested: Readonly<Record<string, readonly (readonly Row[])[]>>
-  /** A press on a run's or a branch's fold mark. */
+  /** A press on a run's, a branch's or a cut step's fold mark. */
   onFold: (row: Row) => void
-  /** The rows the person opened, by `job:<id>`. */
+  /** The rows the person opened, by `job:<id>` or `step:<key>`. */
   open: Readonly<Record<string, boolean>>
-  /** A press on a shell's or an agent's title: opens and closes its detail. */
+  /** A press on a shell's or an agent's mark or title: opens and closes its detail. */
   onJob: (job: Job) => void
   /** A press on an opened row's stop button. */
   onStop: (job: Job) => void
@@ -80,18 +80,18 @@ const rule = ({ Text }: Kit, columns: number): RenderElement => (
   </Text>
 )
 
-/** What an opened row adds under itself: a shell's command, an agent's model and effort. */
-const detailOf = (job: Job): string =>
+/** A shell's command, at most eight lines' worth of cells, or an agent's model and effort. */
+const detailOf = (job: Job, cells: number): string =>
   job.kind === 'shell'
-    ? `$ ${job.detail}`
+    ? fitted(`$ ${job.detail}`, Math.max(1, cells) * 8)
     : [modelName(job.model), job.effort === '' ? '' : `${job.effort} effort`]
         .filter((part) => part !== '')
         .join(' · ') || 'agent'
 
 /**
- * `⏵ Typecheck, test and lint        shell    1m 12s`
+ * `▸ ⏵ Typecheck, test and lint        shell    1m 12s`
  *
- * The title is a button: a press opens the row's detail under it, where a
+ * The mark and title are buttons: a press opens the detail under it, where a
  * job that runs in the background has a stop button. Under a running agent's
  * row come the shells and agents it started and the run it opened. Where the
  * section's name says the kind, the kind's column is left out.
@@ -100,7 +100,7 @@ const detailOf = (job: Job): string =>
 const fitted = (title: string, cells: number): string => {
   const letters = [...title]
 
-  return letters.length > cells ? `${letters.slice(0, Math.max(1, cells - 1)).join('')}…` : title
+  return letters.length > cells ? `${letters.slice(0, Math.max(0, cells - 1)).join('')}…` : title
 }
 
 const jobRow = (
@@ -112,9 +112,10 @@ const jobRow = (
 ): RenderElement => {
   const { Box, Text, Button } = kit
   const hasKind = wantsKind && view.columns >= KIND_FROM
-  // The row's cells less its mark, its indent and its columns at the right.
+  // The row's cells less its fold and state marks, its indent and its columns at the right.
   const room =
-    view.columns - 2 * PAD - 2 - 2 * indent - SPAN_CELLS - (hasKind ? KIND_CELLS : 0) - 1
+    view.columns - 2 * PAD - 4 - 2 * indent - SPAN_CELLS - (hasKind ? KIND_CELLS : 0) - 1
+  const title = fitted(job.title, room)
   // What the agent of this row started and still runs is drawn under it.
   const own =
     job.kind === 'agent' && job.status === 'running'
@@ -128,6 +129,16 @@ const jobRow = (
       <Box>
         <Box width={2 * indent} flexShrink={0} />
         <Box width={2} flexShrink={0}>
+          <Button
+            key={`job-mark:${job.id}`}
+            plain
+            label={isOpen ? '▾' : '▸'}
+            onPress={() => {
+              view.onJob(job)
+            }}
+          />
+        </Box>
+        <Box width={2} flexShrink={0}>
           <Text color={COLORS[job.status]} dimColor={job.status === 'ended'}>
             {GLYPHS[job.status]}
           </Text>
@@ -136,8 +147,8 @@ const jobRow = (
           <Button
             key={`job:${job.id}`}
             plain
-            dimColor={job.status !== 'running' && job.status !== 'failed'}
-            label={fitted(job.title, room)}
+            dimColor={!isOpen && job.status !== 'running' && job.status !== 'failed'}
+            label={title}
             onPress={() => {
               view.onJob(job)
             }}
@@ -153,21 +164,22 @@ const jobRow = (
         </Box>
       </Box>
       {isOpen && (
-        <Box columnGap={2} paddingLeft={2 + 2 * indent}>
-          <Box flexGrow={1} flexShrink={1}>
-            <Text dimColor wrap="truncate-end">
-              {detailOf(job)}
-            </Text>
-          </Box>
+        <Box flexDirection="column" paddingLeft={4 + 2 * indent}>
+          {title !== job.title && <Text wrap="wrap">{job.title}</Text>}
+          <Text dimColor wrap="wrap">
+            {detailOf(job, view.columns - 2 * PAD - 4 - 2 * indent)}
+          </Text>
           {canStop && (
-            <Button
-              key={`stop:${job.id}`}
-              plain
-              label="■ stop"
-              onPress={() => {
-                view.onStop(job)
-              }}
-            />
+            <Box>
+              <Button
+                key={`stop:${job.id}`}
+                plain
+                label="■ stop"
+                onPress={() => {
+                  view.onStop(job)
+                }}
+              />
+            </Box>
           )}
         </Box>
       )}
@@ -268,7 +280,8 @@ const METER_CELLS = 9
 /**
  * One row of a run. A run's and a branch's mark is a button that folds and
  * unfolds it: `▾` open, `▸` folded while under way, and its state's own mark
- * when folded before its start or after its end.
+ * when folded before its start or after its end. A leaf whose title is cut
+ * opens to the full title; a leaf that fits keeps its state mark alone.
  *
  * `▾ Auth renewal                 ▰▰▰▰▰▱▱▱ 5/8   12m 40s`
  * `    ✓ Move the old table                        1m 30s`
@@ -277,8 +290,23 @@ const stepRow = (kit: Kit, row: Row, view: PaneView, indent = 0): RenderElement 
   const { Box, Text, Button } = kit
   const isQuiet = row.status === 'done' || row.status === 'pending'
   const folded = row.status === 'running' || row.kind === 'run' ? '▸' : STEP_GLYPHS[row.status]
+  // A run folded away still says how it stands, beside its mark.
+  const state = row.kind === 'run' && (row.status === 'done' || row.status === 'failed')
+  const hasMeter = row.meter !== '' && view.columns >= BAR_FROM
+  const inset = 2 * (row.depth + indent)
+  const room =
+    view.columns - 2 * PAD - inset - 2 - (state ? 2 : 0) - COUNT_CELLS -
+    SPAN_CELLS - (hasMeter ? METER_CELLS : 0) - 1
+  const isCut = row.kind === 'leaf' && fitted(row.title, room) !== row.title
+  const key = `step:${row.key}`
+  const isOpen = isCut && view.open[key] === true
+  const onPress = () => {
+    view.onFold({ ...row, key, isOpen })
+  }
   const mark =
-    row.kind === 'leaf' ? (
+    isCut ? (
+      <Button key={`step-mark:${row.key}`} plain label={isOpen ? '▾' : '▸'} onPress={onPress} />
+    ) : row.kind === 'leaf' ? (
       <Text color={STEP_COLORS[row.status]} dimColor={row.status === 'pending'}>
         {STEP_GLYPHS[row.status]}
       </Text>
@@ -292,43 +320,60 @@ const stepRow = (kit: Kit, row: Row, view: PaneView, indent = 0): RenderElement 
         }}
       />
     )
-  // A run folded away still says how it stands, beside its mark.
-  const state = row.kind === 'run' && (row.status === 'done' || row.status === 'failed')
 
   return (
-    <Box>
-      <Box width={2 * (row.depth + indent)} flexShrink={0} />
-      <Box width={2} flexShrink={0}>
-        {mark}
-      </Box>
-      {state && (
+    <Box flexDirection="column">
+      <Box>
+        <Box width={inset} flexShrink={0} />
         <Box width={2} flexShrink={0}>
-          <Text color={STEP_COLORS[row.status]}>{STEP_GLYPHS[row.status]}</Text>
+          {mark}
+        </Box>
+        {(state || isCut) && (
+          <Box width={2} flexShrink={0}>
+            <Text color={STEP_COLORS[row.status]} dimColor={row.status === 'pending'}>
+              {STEP_GLYPHS[row.status]}
+            </Text>
+          </Box>
+        )}
+        <Box flexGrow={1} flexShrink={1}>
+          {isCut ? (
+            <Button
+              key={key}
+              plain
+              dimColor={!isOpen && isQuiet}
+              label={fitted(row.title, room - 2)}
+              onPress={onPress}
+            />
+          ) : (
+            <Text
+              bold={row.kind === 'run'}
+              color={row.status === 'failed' ? STEP_COLORS.failed : undefined}
+              dimColor={row.kind !== 'run' && isQuiet}
+              wrap="truncate-end"
+            >
+              {row.title}
+            </Text>
+          )}
+        </Box>
+        {hasMeter && (
+          <Box width={METER_CELLS} flexShrink={0} justifyContent="flex-end">
+            <Text color={STEP_COLORS[row.status]} dimColor={row.status === 'pending'}>
+              {row.meter}
+            </Text>
+          </Box>
+        )}
+        <Box width={COUNT_CELLS} flexShrink={0} justifyContent="flex-end">
+          <Text dimColor={row.kind !== 'run'}>{row.count}</Text>
+        </Box>
+        <Box width={SPAN_CELLS} flexShrink={0} justifyContent="flex-end">
+          <Text dimColor={row.status !== 'running'}>{row.span}</Text>
+        </Box>
+      </Box>
+      {isOpen && (
+        <Box paddingLeft={inset + 4}>
+          <Text wrap="wrap">{row.title}</Text>
         </Box>
       )}
-      <Box flexGrow={1} flexShrink={1}>
-        <Text
-          bold={row.kind === 'run'}
-          color={row.status === 'failed' ? STEP_COLORS.failed : undefined}
-          dimColor={row.kind !== 'run' && isQuiet}
-          wrap="truncate-end"
-        >
-          {row.title}
-        </Text>
-      </Box>
-      {row.meter !== '' && view.columns >= BAR_FROM && (
-        <Box width={METER_CELLS} flexShrink={0} justifyContent="flex-end">
-          <Text color={STEP_COLORS[row.status]} dimColor={row.status === 'pending'}>
-            {row.meter}
-          </Text>
-        </Box>
-      )}
-      <Box width={COUNT_CELLS} flexShrink={0} justifyContent="flex-end">
-        <Text dimColor={row.kind !== 'run'}>{row.count}</Text>
-      </Box>
-      <Box width={SPAN_CELLS} flexShrink={0} justifyContent="flex-end">
-        <Text dimColor={row.status !== 'running'}>{row.span}</Text>
-      </Box>
     </Box>
   )
 }

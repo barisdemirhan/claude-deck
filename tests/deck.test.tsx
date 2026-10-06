@@ -723,6 +723,178 @@ test('a press on a row opens its detail, and a background job can be stopped fro
   expect(await paneTexts($)).toEqual(expect.arrayContaining(['RECENT', '■', 'Start the dev server']))
 })
 
+test('a cut shell title and command wrap when its title or mark opens it, and stop stays pressable', async ($, on) => {
+  const { bash, stops } = world(on)
+  await $.session.start(SESSION)
+  const title = 'Check the release against every supported platform before shipping it'
+  const command = 'npm run verify -- --platform terminal --platform desktop --check build --check types --check tests'
+  bash.result = { backgroundTaskId: 'task-long' }
+  await $.tool.call({ tool: 'Bash', command, description: title, run_in_background: true, tool_use_id: 'long' })
+
+  for (const surface of ['terminal', 'desktop'] as const) {
+    const pane = await $.ui.mount({ ...PANE, surface })
+    for (const key of ['job:long', 'job-mark:long']) {
+      expect((await pane.find({ key: 'job-mark:long' }))?.props.label).toBe('▸')
+      expect((await pane.find({ key: 'job:long' }))?.props.label).toBe(`${title.slice(0, 48)}…`)
+      expect(await pane.find({ type: 'Text', text: title })).toBeUndefined()
+      expect(await pane.find({ type: 'Text', text: `$ ${command}` })).toBeUndefined()
+      expect(await pane.find({ key: 'stop:long' })).toBeUndefined()
+
+      await pane.press({ key })
+      expect((await pane.find({ key: 'job-mark:long' }))?.props.label).toBe('▾')
+      expect((await pane.find({ key: 'job:long' }))?.props.dimColor).toBe(false)
+      expect((await pane.find({ type: 'Text', text: title }))?.props.wrap).toBe('wrap')
+      expect((await pane.find({ type: 'Text', text: `$ ${command}` }))?.props.wrap).toBe('wrap')
+      expect((await pane.find({ key: 'stop:long' }))?.props.label).toBe('■ stop')
+      const texts = (await pane.findAll({ type: 'Text' })).map((text) => text.text)
+      expect(texts.indexOf(title)).toBeLessThan(texts.indexOf(`$ ${command}`))
+      expect(texts).toContain('⏵')
+      await pane.press({ key })
+      expect((await pane.find({ key: 'job-mark:long' }))?.props.label).toBe('▸')
+      expect(await pane.find({ type: 'Text', text: title })).toBeUndefined()
+      expect(await pane.find({ type: 'Text', text: `$ ${command}` })).toBeUndefined()
+    }
+    await pane.unmount()
+  }
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'job-mark:long' })
+  await pane.press({ key: 'stop:long' })
+  expect(stops).toEqual(['task-long'])
+  await pane.unmount()
+})
+
+test('an opened recent row is not dim, and a title that fits is not repeated', async ($, on) => {
+  const { bash, clock } = world(on)
+  await $.session.start(SESSION)
+  bash.ms = 4_000
+  const call = $.tool.call({ tool: 'Bash', command: 'make', description: 'Build it', tool_use_id: 'recent' })
+  // A foreground job stays in recent once it has run long enough.
+  await clock.advance(4_000)
+  await call
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  expect((await pane.find({ key: 'job:recent' }))?.props.dimColor).toBe(true)
+  expect((await pane.find({ key: 'job-mark:recent' }))?.props.label).toBe('▸')
+  await pane.press({ key: 'job-mark:recent' })
+  expect((await pane.find({ key: 'job:recent' }))?.props.dimColor).toBe(false)
+  expect((await pane.find({ key: 'job-mark:recent' }))?.props.label).toBe('▾')
+  expect(await pane.find({ type: 'Text', text: 'Build it' })).toBeUndefined()
+  expect((await pane.find({ type: 'Text', text: '$ make' }))?.props.wrap).toBe('wrap')
+  await pane.unmount()
+})
+
+test('a long command is bounded to eight lines worth of characters', async ($, on) => {
+  const { bash } = world(on)
+  await $.session.start(SESSION)
+  bash.result = { backgroundTaskId: 'task-cap' }
+  const command = 'x'.repeat(200)
+  await $.tool.call({ tool: 'Bash', command, description: 'Long command', run_in_background: true, tool_use_id: 'cap' })
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 30 } })
+  await pane.press({ key: 'job:cap' })
+  const text = (await pane.findAll({ type: 'Text' })).find((one) => one.text.startsWith('$ '))
+  expect(text?.text).toBe(`$ ${'x'.repeat(189)}…`)
+  expect(text?.text.length).toBe((30 - 2 - 4) * 8)
+  expect(text?.props.wrap).toBe('wrap')
+  expect((await pane.find({ key: 'stop:cap' }))?.props.label).toBe('■ stop')
+  await pane.unmount()
+})
+
+test(
+  'a cut run leaf opens its full title by title or mark, keeping its state apart from the run fold',
+  { options: { modelTool: true } },
+  async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    const title = 'Verify the release against every supported platform before shipping it'
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Release', steps: `${title}\nShip` })
+    for (const surface of ['terminal', 'desktop'] as const) {
+      const pane = await $.ui.mount({ ...PANE, surface })
+      expect(await pane.find({ key: 'step:r1/2' })).toBeUndefined()
+      expect(await pane.find({ type: 'Text', text: 'Ship' })).toBeDefined()
+      expect(await pane.find({ key: 'fold:r1/1' })).toBeUndefined()
+      expect(await pane.find({ type: 'Text', text: '⏵' })).toBeDefined()
+      for (const key of ['step:r1/1', 'step-mark:r1/1']) {
+        expect((await pane.find({ key: 'step-mark:r1/1' }))?.props.label).toBe('▸')
+        expect((await pane.find({ key: 'step:r1/1' }))?.props.label).toBe(`${title.slice(0, 40)}…`)
+        expect(await pane.find({ type: 'Text', text: title })).toBeUndefined()
+        await pane.press({ key })
+        expect((await pane.find({ key: 'step-mark:r1/1' }))?.props.label).toBe('▾')
+        expect((await pane.find({ type: 'Text', text: title }))?.props.wrap).toBe('wrap')
+        expect((await pane.find({ key: 'fold:r1' }))?.props.label).toBe('▾')
+        await pane.press({ key: 'fold:r1' })
+        expect(await pane.find({ type: 'Text', text: title })).toBeUndefined()
+        await pane.press({ key: 'fold:r1' })
+        expect((await pane.find({ type: 'Text', text: title }))?.props.wrap).toBe('wrap')
+        await pane.press({ key })
+        expect((await pane.find({ key: 'step-mark:r1/1' }))?.props.label).toBe('▸')
+        expect(await pane.find({ type: 'Text', text: title })).toBeUndefined()
+      }
+      await pane.unmount()
+    }
+  },
+)
+
+test(
+  'a leaf at the title width stays text, and one character past it can open',
+  { options: { modelTool: true } },
+  async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    const fits = 'F'.repeat(43)
+    const cut = 'C'.repeat(44)
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Boundary', steps: `${fits}\n${cut}` })
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect((await pane.find({ type: 'Text', text: fits }))?.props.wrap).toBe('truncate-end')
+    expect(await pane.find({ key: 'step:r1/1' })).toBeUndefined()
+    expect(await pane.find({ key: 'step-mark:r1/1' })).toBeUndefined()
+    expect((await pane.find({ key: 'step:r1/2' }))?.props.label).toBe(`${'C'.repeat(40)}…`)
+    await pane.press({ key: 'step:r1/2' })
+    expect((await pane.find({ type: 'Text', text: cut }))?.props.wrap).toBe('wrap')
+    expect((await pane.find({ key: 'step:r1/2' }))?.props.dimColor).toBe(false)
+    await pane.unmount()
+  },
+)
+
+test(
+  'job and cut leaf rows leave room for every column at 36, 44 and 64 cells, including under an agent',
+  { options: { modelTool: true } },
+  async ($, on) => {
+    const { bash } = world(on)
+    await $.session.start(SESSION)
+    const title = 'A'.repeat(70)
+    bash.isError = true
+    await $.tool.call({ tool: 'Bash', command: 'make', description: title, tool_use_id: 'width-recent' })
+    bash.isError = false
+    bash.result = { backgroundTaskId: 'task-width' }
+    await $.tool.call({ tool: 'Bash', command: 'make', description: title, run_in_background: true, tool_use_id: 'width-top' })
+    await $.agent.spawn({ ...SPAWN, parentModel: 'claude-sonnet-5-5' })
+    await $.tool.call({ tool: 'Bash', command: 'make', description: title, run_in_background: true, tool_use_id: 'width-nested', ...({ agentId: 'agent-1' } as object) })
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Nested', steps: title, agentId: 'agent-1' })
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Top', steps: title })
+
+    for (const bodyColumns of [36, 44, 64]) {
+      const pane = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns } })
+      // The labels are drawn text. Add the fixed columns and both pane pads:
+      // fold, state, indent, kind where present, time, and a spare cell.
+      for (const [id, indent, kind] of [['width-top', 0, 0], ['width-nested', 1, 0], ['width-recent', 0, 7]] as const) {
+        const label = String((await pane.find({ key: `job:${id}` }))?.props.label)
+        const fixed = 2 + 4 + 2 * indent + kind + 8 + 1
+        expect(label).toBe(`${title.slice(0, bodyColumns - fixed - 1)}…`)
+        expect([...label].length + fixed).toBe(bodyColumns)
+        expect((await pane.find({ key: `job-mark:${id}` }))?.props.label).toBe('▸')
+      }
+      // A leaf has a count column too; the nested run adds one indent level.
+      for (const [id, indent] of [['r1/1', 1], ['r2/1', 0]] as const) {
+        const label = String((await pane.find({ key: `step:${id}` }))?.props.label)
+        const fixed = 2 + 4 + 2 * (1 + indent) + 6 + 8 + 1
+        expect(label).toBe(`${title.slice(0, bodyColumns - fixed - 1)}…`)
+        expect([...label].length + fixed).toBe(bodyColumns)
+      }
+      await pane.unmount()
+    }
+  },
+)
+
 test(
   'a running agent has the run it opened and the shell it started under its own row',
   { options: { modelTool: true } },
@@ -746,7 +918,7 @@ test(
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
     const labels = (await pane.findAll({ type: 'Button' })).map((button) => String(button.props.label))
     // The agent's row comes first, its shell right after it.
-    expect(labels.indexOf('Search the tree')).toBe(labels.indexOf('Explore(find callers)') + 1)
+    expect(labels.indexOf('Search the tree')).toBe(labels.indexOf('Explore(find callers)') + 2)
     const texts = (await pane.findAll({ type: 'Text' })).map((text) => text.text)
     // The run sits in the agents' section, under the agent's row.
     expect(texts.indexOf('Find callers')).toBeGreaterThan(texts.indexOf('AGENTS · 1'))
@@ -899,8 +1071,8 @@ test('a long title is cut to one line of the pane', async ($, on) => {
   await clock.advance(1_000)
 
   const labels = await paneTexts($)
-  // 64 cells: two of padding, two for the mark, eight for the time, one spare.
-  expect(labels).toContain(`${'A'.repeat(50)}…`)
+  // 64 cells: two of padding, four for the fold and state marks, eight for the time, one spare.
+  expect(labels).toContain(`${'A'.repeat(48)}…`)
   await clock.advance(9_000)
   await call
 })

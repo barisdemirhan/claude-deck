@@ -140,6 +140,10 @@ A pass over what a day of additions had left, taking out what earned no place:
 
 Also in 0.8: a pane that Claude Code keeps waiting undrawn (opened where it had no room) is no longer taken for an open one. A press on the label closed such a pane, the next opened it to wait again, and nothing was drawn or said. Now the press opens it, and a toast gives Claude Code's reason where it still waits. A press on a transcript row asks for the pane before anything else.
 
+## 0.8.3
+
+**Rows say whether they are open.** A shell's or an agent's `▸` / `▾` stands before its state mark, and either it or the title opens the detail. A cut title is given in full underneath, wrapped, then the command or the model and effort; the command wraps too, bounded to eight lines' worth of characters, and stop has its own line. A cut leaf of a run opens the same way, with a fold of its own; a leaf that fits stays as it was. Nothing new is read or sent. The engine's tests press both marks and titles and check their drawn text, and count the row's cells at 36, 44 and 64 columns; they do not see a pointer or layout.
+
 ## Checked
 
 Both on 2026-10-05 with Claude Code 2.1.289: a throwaway mod that logged every event under `claude -p`, then 0.1 itself in an interactive session.

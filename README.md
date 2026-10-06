@@ -46,11 +46,11 @@ Where there is a pointer, the terminal's fullscreen layout or the desktop app, t
 | Part | What it shows |
 | --- | --- |
 | The first rows | The main thread's model, its effort meter, and how full the context window is. Under them what the session cost and how full each rate limit is (`$1.24 · 5h 34% · 7d 12%`) |
-| `SHELLS` and `AGENTS` | Each shell command and each subagent that runs now, in a section of its own, with how long it has run. A title too long for its row is cut with `…`. A shell is named by what its call says it does, or by the first line of its command where the call says nothing; a subagent by its type and task, as `general-purpose(Ship the release)`. What a running agent started, its own shells and agents and the run it opened, is drawn under its row |
+| `SHELLS` and `AGENTS` | Each shell command and each subagent that runs now, in a section of its own, with how long it has run. Each row starts with `▸` closed or `▾` open, before its state mark. A title too long for its row is cut with `…`. A shell is named by what its call says it does, or by the first line of its command where the call says nothing; a subagent by its type and task, as `general-purpose(Ship the release)`. What a running agent started, its own shells and agents and the run it opened, is drawn under its row |
 | The runs | Each job's steps as a tree, between the two lists. See below |
 | `RECENT` | The last eight that ended: `✓` done, `✗` failed, `■` stopped, `·` ended with no word on how. A foreground command that went well in under three seconds is left out |
 
-A press on a row's title opens its detail under it: a shell's command, its first line, or an agent's model and effort. Where the job runs in the background, the detail has a `■ stop` button, which asks Claude Code to stop that task as its own TaskStop tool does. `× clear` on the pane's last line does what `/deck clear` does. What is over also leaves the pane by itself after half an hour.
+A press on a row's mark or title opens its detail under it, and another closes it. If the title was cut, its full text comes first, wrapped over as many lines as it needs; a title that fits is not repeated. Under that is a shell's command, its first line, wrapped and bounded to eight lines' worth of characters with a final `…` where it is cut, or an agent's model and effort. An open title is no longer dim. Where the job runs in the background, a line under the detail has a `■ stop` button, which asks Claude Code to stop that task as its own TaskStop tool does. `× clear` on the pane's last line does what `/deck clear` does. What is over also leaves the pane by itself after half an hour.
 
 A shell that Claude runs in the background, or that a timeout or ctrl+b moves there, stays under `SHELLS` until Claude Code reports its end. That report waits for the tool call Claude is in, so a background shell's time can read longer than it ran.
 
@@ -77,6 +77,8 @@ A loop shows one run at a time: when an agent opens a plan, the task list it was
 - **A plan with levels** needs the **Tool for Claude** setting, below.
 
 The run under way is open, and the others are one row each. Inside a run, a branch is open while it is under way and folds by itself before it starts and once it is over. A press on a row's mark folds or unfolds it: `▾` open, `▸` folded. A step that failed is a red `✗`, and so is every branch above it, so a folded run still shows it. A run a subagent opened carries the agent's name: `Ship the release · general-purpose`.
+
+A step whose title does not fit has its own `▸` / `▾` mark beside its state. A press on that mark or the cut title opens the full title wrapped under it; a step that fits stays one line.
 
 Only the steps at the ends of the tree have a state. A branch's state, its count and its time come from the steps under it.
 
