@@ -27,6 +27,11 @@ export type Job = {
   effort: string
   /** The agent whose loop started it, by id; empty when the main thread did. */
   owner: string
+  /**
+   * True while Claude Code asks the person whether a shell may run: its clock
+   * starts once it does.
+   */
+  isAsking: boolean
 }
 
 export type Work = { running: Job[]; recent: Job[] }
@@ -130,6 +135,8 @@ declare module 'claude-code' {
       spans: Record<string, number>
       /** The branches the person folded or unfolded, by `run/step`: true is open. */
       folds: Record<string, boolean>
+      /** The cells the deck's pane takes from the screen's width while it is docked; 0 while it is not. */
+      docked: number
     }
   }
 }

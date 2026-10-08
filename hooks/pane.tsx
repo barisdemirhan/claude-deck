@@ -40,6 +40,8 @@ export type PaneView = {
   now: number
   /** Cells across the pane's body. */
   columns: number
+  /** True where the pane sits above the prompt, a few rows tall, and not beside the conversation. */
+  isInline: boolean
   /** A press on the effort meter. */
   onEffort: () => void
   /** Each run as rows, the newest touched first, but for those drawn under their agent. */
@@ -68,6 +70,11 @@ const COLORS: Readonly<Record<Job['status'], string | undefined>> = {
 
 /** The pane's body is drawn one cell in from each side. */
 const PAD = 1
+/** A shell Claude Code asks the person about: its mark, and what stands in for its clock. */
+const ASKING = '?'
+const ASKING_SPAN = 'waits'
+/** How many ended jobs the pane lists above the prompt, where it has a few rows. */
+const RECENT_INLINE = 3
 const KIND_CELLS = 7
 const SPAN_CELLS = 8
 /** A pane narrower than this leaves out a run's bar, and one narrower than the other a row's kind: the title needs the cells. */
@@ -139,8 +146,8 @@ const jobRow = (
           />
         </Box>
         <Box width={2} flexShrink={0}>
-          <Text color={COLORS[job.status]} dimColor={job.status === 'ended'}>
-            {GLYPHS[job.status]}
+          <Text color={job.isAsking ? 'warning' : COLORS[job.status]} dimColor={job.status === 'ended'}>
+            {job.isAsking ? ASKING : GLYPHS[job.status]}
           </Text>
         </Box>
         <Box flexGrow={1} flexShrink={1}>
@@ -160,7 +167,9 @@ const jobRow = (
           </Box>
         )}
         <Box width={SPAN_CELLS} flexShrink={0} justifyContent="flex-end">
-          <Text dimColor={job.status !== 'running'}>{jobSpan(job, view.now)}</Text>
+          <Text dimColor={job.status !== 'running' || job.isAsking}>
+            {job.isAsking ? ASKING_SPAN : jobSpan(job, view.now)}
+          </Text>
         </Box>
       </Box>
       {isOpen && (
@@ -194,7 +203,9 @@ const jobRow = (
 
 /**
  * The model, its effort meter (a button where a press can change it) and the
- * context's fill; under them the session's cost and its limits.
+ * context's fill; under them the session's cost and its limits. Above the
+ * prompt, where the pane has a few rows, the cost and the limits share the
+ * first row while it has room.
  */
 const head = (kit: Kit, view: PaneView): RenderElement => {
   const { Box, Text, Button } = kit
@@ -202,6 +213,11 @@ const head = (kit: Kit, view: PaneView): RenderElement => {
   const effort = effortText(meter)
   const context = contextText(meter)
   const usage = usageText(meter)
+  const spent = (
+    <Text color={isTight(meter) ? 'warning' : undefined} dimColor={!isTight(meter)} wrap="truncate-end">
+      {usage}
+    </Text>
+  )
 
   return (
     <Box flexDirection="column">
@@ -226,13 +242,10 @@ const head = (kit: Kit, view: PaneView): RenderElement => {
             </Text>
           )}
         </Box>
+        {view.isInline && usage !== '' && spent}
         {context !== '' && <Text dimColor={meter.context < 80}>{context}</Text>}
       </Box>
-      {usage !== '' && (
-        <Text color={isTight(meter) ? 'warning' : undefined} dimColor={!isTight(meter)} wrap="truncate-end">
-          {usage}
-        </Text>
-      )}
+      {!view.isInline && usage !== '' && spent}
     </Box>
   )
 }
@@ -420,6 +433,9 @@ export const paneTree = (kit: Kit, view: PaneView): RenderElement => {
   const shells = work.running.filter((job) => job.kind === 'shell' && isTop(job))
   const agents = work.running.filter((job) => job.kind === 'agent' && isTop(job))
   const blank = <Text> </Text>
+  // Above the prompt the newest few ended jobs are listed, and the rest counted.
+  const recent = view.isInline ? work.recent.slice(0, RECENT_INLINE) : work.recent
+  const hidden = work.recent.length - recent.length
   const clear = (
     <Button key="clear" plain dimColor label="× clear" onPress={view.onClear} />
   )
@@ -439,7 +455,8 @@ export const paneTree = (kit: Kit, view: PaneView): RenderElement => {
       )}
       {more.flatMap((part) => [line, part])}
       {work.recent.length > 0 && line}
-      {work.recent.length > 0 && section(kit, 'RECENT', blank, work.recent, view)}
+      {work.recent.length > 0 &&
+        section(kit, 'RECENT', hidden > 0 ? <Text dimColor>{`+${hidden} more`}</Text> : blank, recent, view)}
       {canClear && <Box justifyContent="flex-end">{clear}</Box>}
     </Box>
   )
@@ -462,12 +479,18 @@ export type LabelView = {
   onEffort: () => void
   /** How many shells and agents run. */
   running: number
-  /** The run under way with its count, `Auth renewal 5/8`; empty with none. */
-  run: string
+  /** The run under way, `Auth renewal`, and its count, `5/8`; both empty with none. */
+  runTitle: string
+  runCount: string
+  /** How many cells of the run's title show. */
+  runCells: number
   /** True when a step of that run failed. */
   isFailed: boolean
-  /** A press on the deck's mark, or on the run: opens or closes the pane. */
-  onPress: () => void
+  /**
+   * A press on the deck's mark, or on the run: opens or closes the pane. Its
+   * promise goes back to the press, so the pane it opens is the person's ask.
+   */
+  onPress: () => Promise<void>
   /** A press on the row's `×`: the label goes back to the hint line as text. */
   onClose: () => void
 }
@@ -483,6 +506,7 @@ export type LabelView = {
 export const labelRow = (kit: Kit, view: LabelView): RenderElement => {
   const { Box, Text, Button } = kit
   const dot = <Text dimColor>·</Text>
+  const run = runLabel(view)
 
   return (
     <Box columnGap={1}>
@@ -506,14 +530,124 @@ export const labelRow = (kit: Kit, view: LabelView): RenderElement => {
         ))}
       {view.running > 0 && dot}
       {view.running > 0 && <Text color={COLORS.running}>{`${GLYPHS.running} ${view.running}`}</Text>}
-      {view.run !== '' && dot}
-      {view.run !== '' && view.isFailed && <Text color={COLORS.failed}>{GLYPHS.failed}</Text>}
-      {view.run !== '' && (
-        <Button key="deck-run" plain dimColor label={view.run} onPress={view.onPress} />
-      )}
+      {run !== '' && dot}
+      {run !== '' && view.isFailed && <Text color={COLORS.failed}>{GLYPHS.failed}</Text>}
+      {run !== '' && <Button key="deck-run" plain dimColor label={run} onPress={view.onPress} />}
       <Button key="deck-row-close" plain dimColor label="×" onPress={view.onClose} />
     </Box>
   )
+}
+
+/** The run as the label shows it: `Auth renewal 5/8`, its title cut to its cells. */
+const runLabel = (view: LabelView): string =>
+  view.runTitle === '' ? '' : `${fitted(view.runTitle, view.runCells)} ${view.runCount}`
+
+const widthOf = (text: string): number => [...text].length
+
+/** The cells the label's row takes, as `labelRow` draws it: its parts, a cell between each. */
+export const labelCells = (view: LabelView): number => {
+  const run = runLabel(view)
+  const parts = [
+    1,
+    widthOf(view.head),
+    widthOf(view.bar),
+    view.bar === '' ? 0 : view.canStep ? LEVEL_CELLS : widthOf(view.level),
+    view.running > 0 ? 1 : 0,
+    view.running > 0 ? widthOf(`${GLYPHS.running} ${view.running}`) : 0,
+    run === '' ? 0 : 1,
+    run !== '' && view.isFailed ? 1 : 0,
+    widthOf(run),
+    1,
+  ].filter((cells) => cells > 0)
+
+  return parts.reduce((sum, cells) => sum + cells, 0) + parts.length - 1
+}
+
+/** The fewest cells of a run's title the label keeps before it leaves the run out. */
+const RUN_MIN_CELLS = 6
+
+/**
+ * The label fitted to `room` cells, so its run and its `×` are not pushed
+ * past the screen's edge: the run's title is cut first, then the model's
+ * name goes, then the run. What still does not fit is drawn as it is.
+ */
+export const fittedLabel = (view: LabelView, room: number): LabelView => {
+  const over = labelCells(view) - room
+
+  if (over <= 0) {
+    return view
+  }
+
+  const shown = Math.min(view.runCells, widthOf(view.runTitle))
+
+  if (view.runTitle !== '' && shown - over >= RUN_MIN_CELLS) {
+    return { ...view, runCells: shown - over }
+  }
+
+  if (view.head !== '') {
+    return fittedLabel({ ...view, head: '' }, room)
+  }
+
+  return view.runTitle === '' ? view : fittedLabel({ ...view, runTitle: '', runCount: '' }, room)
+}
+
+/** The cells a drawn row takes, near enough: its text, and its gaps where it is a row. */
+const cellsOf = (node: RenderNode): number => {
+  if (typeof node === 'string') {
+    return widthOf(node)
+  }
+
+  if (node.type === 'Button') {
+    return widthOf(node.props.label)
+  }
+
+  if (node.type === 'Text') {
+    return (node.children ?? []).map(cellsOf).reduce((sum: number, cells: number) => sum + cells, 0)
+  }
+
+  if (node.type !== 'Box') {
+    return 0
+  }
+
+  const kids: number[] = (node.children ?? []).map(cellsOf)
+
+  if (node.props?.flexDirection === 'column') {
+    return Math.max(0, ...kids)
+  }
+
+  const gap = typeof node.props?.columnGap === 'number' ? node.props.columnGap : 0
+
+  return kids.reduce((sum, cells) => sum + cells, 0) + gap * Math.max(0, kids.length - 1)
+}
+
+/**
+ * The cells of the row another mod drew under the hint line, which the
+ * label joins as `beside` puts it, with its gap; 0 where the label gets a
+ * row of its own.
+ */
+export const besideCells = (tree: RenderNode): number => {
+  if (typeof tree === 'string' || tree.type !== 'Box' || tree.children === undefined) {
+    return 0
+  }
+
+  const [first, second] = tree.children
+  const isLine = typeof first === 'string' || first?.type !== 'Box'
+
+  if (
+    tree.props?.flexDirection !== 'column' ||
+    !isLine ||
+    second === undefined ||
+    typeof second === 'string' ||
+    second.type !== 'Box' ||
+    second.props?.flexDirection === 'column' ||
+    second.children === undefined
+  ) {
+    return 0
+  }
+
+  const gap = typeof second.props?.columnGap === 'number' ? second.props.columnGap : 0
+
+  return cellsOf(second) + gap
 }
 
 /**
@@ -575,6 +709,8 @@ export type CallRow = {
   /** The call's id. */
   id: string
   status: Job['status']
+  /** True while Claude Code asks the person whether it may run. */
+  isAsking: boolean
   title: string
   /** `8s`; empty where it is not known, or under a second. */
   span: string
@@ -583,24 +719,33 @@ export type CallRow = {
 /** How many calls of a group get a row; the rest are counted. */
 const GROUP_ROWS = 4
 const GROUP_TITLE_CELLS = 56
+/** A group row's cells but its title: its indent, mark, gaps and the longest time, `14m 03s`. */
+const GROUP_FIXED_CELLS = 13
+const GROUP_MIN_CELLS = 12
 
 /**
  * `line`, the transcript's own row for a group of tool calls, with a row
  * under it for each shell command of the group: its mark, what it does and
- * how long it ran. A press on a title opens the pane at that command.
+ * how long it ran. A press on a title opens the pane at that command; its
+ * promise goes back to the press, so the pane it opens is the person's ask.
  *
  *     Ran 3 shell commands
  *       ✓ Check the version           2s
  *       ✗ Verify the profile          8s
+ *
+ * A title is cut to what the conversation's `columns` leave it, and to 56
+ * cells at most.
  */
 export const groupTree = (
   kit: Kit,
   line: RenderElement,
   rows: readonly CallRow[],
-  onPress: (row: CallRow) => void,
+  onPress: (row: CallRow) => Promise<void>,
+  columns = Number.POSITIVE_INFINITY,
 ): RenderElement => {
   const { Box, Text, Button } = kit
   const more = rows.length - GROUP_ROWS
+  const cells = Math.max(GROUP_MIN_CELLS, Math.min(GROUP_TITLE_CELLS, columns - GROUP_FIXED_CELLS))
 
   return (
     <Box flexDirection="column">
@@ -608,17 +753,15 @@ export const groupTree = (
       {rows.slice(0, GROUP_ROWS).map((row) => (
         <Box columnGap={2} paddingLeft={2}>
           <Box columnGap={1}>
-            <Text color={COLORS[row.status]} dimColor={row.status === 'ended'}>
-              {GLYPHS[row.status]}
+            <Text color={row.isAsking ? 'warning' : COLORS[row.status]} dimColor={row.status === 'ended'}>
+              {row.isAsking ? ASKING : GLYPHS[row.status]}
             </Text>
             <Button
               key={`call:${row.id}`}
               plain
               dimColor={row.status === 'done'}
-              label={fitted(row.title, GROUP_TITLE_CELLS)}
-              onPress={() => {
-                onPress(row)
-              }}
+              label={fitted(row.title, cells)}
+              onPress={() => onPress(row)}
             />
           </Box>
           {row.span !== '' && <Text dimColor>{row.span}</Text>}

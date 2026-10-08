@@ -26,6 +26,7 @@ const shell = (id: string, startedAt = 0): Job => ({
   model: '',
   effort: '',
   owner: '',
+  isAsking: false,
 })
 
 test('a shell is named by what it says it does, else by its command\'s first line', async () => {
@@ -43,7 +44,7 @@ test('a quick foreground command that went well leaves no row; a slow or failed 
 })
 
 test('a background shell runs on until its task is reported, and takes the report\'s status', async () => {
-  const work = backgrounded(started(NO_WORK, shell('call-1')), 'call-1', 'task-1')
+  const work = backgrounded(started(NO_WORK, shell('call-1')), 'call-1', 'task-1', 0)
   expect(work.running[0]?.taskId).toBe('task-1')
 
   const after = reported(work, { taskId: 'task-1', status: 'failed' }, 9000)
@@ -55,7 +56,7 @@ test('a background shell runs on until its task is reported, and takes the repor
 
 test('a background shell Claude Code no longer lists is closed with no status, which a late report fills in', async () => {
   const two = ['a', 'b'].reduce(
-    (left, id) => backgrounded(started(left, shell(id)), id, `task-${id}`),
+    (left, id) => backgrounded(started(left, shell(id)), id, `task-${id}`, 0),
     started(NO_WORK, shell('front')),
   )
   const after = settled(two, ['task-b'], 5000)

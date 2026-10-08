@@ -49,9 +49,28 @@ export const started = (work: Work, job: Job): Work => ({
 })
 
 /** The job went to the background under this task id, and runs on. */
-export const backgrounded = (work: Work, id: string, taskId: string): Work => ({
+export const backgrounded = (work: Work, id: string, taskId: string, at: number): Work => ({
   ...work,
-  running: work.running.map((job) => (job.id === id ? { ...job, taskId } : job)),
+  running: work.running.map((job) =>
+    job.id === id ? { ...job, taskId, ...(job.isAsking ? { isAsking: false, startedAt: at } : {}) } : job,
+  ),
+})
+
+/** Claude Code asks the person whether this shell may run. */
+export const asked = (work: Work, id: string): Work => ({
+  ...work,
+  running: work.running.map((job) => (job.id === id ? { ...job, isAsking: true } : job)),
+})
+
+/**
+ * The shell the person was asked about runs since `at`: its clock starts
+ * there. One nobody asked about keeps the start its call had.
+ */
+export const begun = (work: Work, id: string, at: number): Work => ({
+  ...work,
+  running: work.running.map((job) =>
+    job.id === id && job.isAsking ? { ...job, isAsking: false, startedAt: Math.max(job.startedAt, at) } : job,
+  ),
 })
 
 const isWorthKeeping = (job: Job): boolean =>
@@ -61,7 +80,10 @@ const isWorthKeeping = (job: Job): boolean =>
   job.endedAt - job.startedAt >= WORTH_MS
 
 const closed = (work: Work, job: Job, status: JobStatus, at: number): Work => {
-  const ended = { ...job, status, endedAt: Math.max(at, job.startedAt) }
+  // One that ended while the person was still asked ran under the two seconds
+  // that show it began, or never ran: the wait is not its time.
+  const from = job.isAsking ? Math.max(at, job.startedAt) : job.startedAt
+  const ended = { ...job, status, startedAt: from, endedAt: Math.max(at, from), isAsking: false }
   const running = work.running.filter((one) => one.id !== job.id)
 
   return isWorthKeeping(ended)
@@ -114,6 +136,13 @@ export const settled = (work: Work, alive: readonly string[], at: number): Work 
   work.running
     .filter((job) => job.kind === 'shell' && job.taskId !== '' && !alive.includes(job.taskId))
     .reduce((left, job) => closed(left, job, 'ended', at), work)
+
+/**
+ * Every job still running ends here with no status: the deck was closed and
+ * sees no end from now on, so none runs on in the pane when it comes back.
+ */
+export const endedAll = (work: Work, at: number): Work =>
+  work.running.reduce((left, job) => closed(left, job, 'ended', at), work)
 
 /** An agent that ended is at work again (a message woke it): its row runs on. */
 export const revived = (work: Work, id: string): Work => {

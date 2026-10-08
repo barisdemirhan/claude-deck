@@ -39,9 +39,11 @@ export const GLYPHS: Readonly<Record<Job['status'], string>> = {
  */
 export const labelText = (meter: Meter, work: Work, more: readonly string[] = []): string => {
   const model = [modelName(meter.model), effortText(meter)].filter((part) => part !== '')
+  // A shell Claude Code asks the person about is not counted as running.
+  const running = work.running.filter((job) => !job.isAsking).length
   const parts = [
     model.join(' '),
-    work.running.length > 0 ? `${GLYPHS.running} ${work.running.length}` : '',
+    running > 0 ? `${GLYPHS.running} ${running}` : '',
     ...more,
   ].filter((part) => part !== '')
 

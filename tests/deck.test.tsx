@@ -55,7 +55,11 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
   const stops: string[] = []
   const tasks = { count: 0, prompts: [] as string[] }
   // Whether Claude Code draws a pane it is asked to open, or keeps it waiting.
-  const seat = { isPlaced: true }
+  // On a narrow terminal it draws only what the person asked for: an open made
+  // while their press is answered, and a pane it drew already.
+  const seat = { isPlaced: true, isNarrow: false }
+  const placed = new Set<string>()
+  const person = { presses: 0 }
   // GitHub, as `gh api` and the API itself answer it: each path's JSON, the
   // paths asked each way, and what the mod submitted as a prompt.
   const github = {
@@ -104,7 +108,13 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
     return { text: e.text }
   })
 
-  on('store.get', (_$, e) => ({ value: store.get(e.key) }))
+  // Which keys were read: each read is a read of the store's file.
+  const reads: string[] = []
+  on('store.get', (_$, e) => {
+    reads.push(e.key)
+
+    return { value: store.get(e.key) }
+  })
   on('store.set', (_$, e) => {
     store.set(e.key, JSON.parse(JSON.stringify(e.value)))
 
@@ -144,13 +154,33 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
       cost: { usd: 1.239 },
     },
   }))
+  // A press is the person's ask while its handler runs, the work it hands back included.
+  on('ui.press', async (_$, e, next) => {
+    person.presses += 1
+
+    try {
+      return await next(e)
+    } finally {
+      person.presses -= 1
+    }
+  })
+  const isSeated = (id: string): boolean => seat.isPlaced && (!seat.isNarrow || placed.has(id))
   on('ui.open', (_$, e) => {
     panes.add(e.id)
 
-    return { value: seat.isPlaced ? { isPlaced: true } : { isPlaced: false, reason: '120 columns, 144 needed' } }
+    if (seat.isNarrow && person.presses > 0) {
+      placed.add(e.id)
+    }
+
+    return {
+      value: isSeated(e.id)
+        ? { isPlaced: true }
+        : { isPlaced: false, reason: seat.isNarrow ? '100 columns, 144 needed unasked' : '120 columns, 144 needed' },
+    }
   })
   on('ui.close', (_$, e) => {
     panes.delete(e.id)
+    placed.delete(e.id)
 
     return { value: undefined }
   })
@@ -160,7 +190,7 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
       title: id,
       isShown: true,
       isFocused: false,
-      isPlaced: seat.isPlaced,
+      isPlaced: isSeated(id),
     })),
   }))
   on('ui.render', { component: 'PromptHint' }, ($, e) => {
@@ -182,6 +212,11 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
     const { Text } = $.ui.resolve(e)
 
     return <Text>{`Ran ${e.props.calls.length} tool calls`}</Text>
+  })
+  on('ui.render', { component: 'ToolProgress' }, ($, e) => {
+    const { Text } = $.ui.resolve(e)
+
+    return <Text dimColor>{e.props.hint}</Text>
   })
   on('ui.render', { component: 'UserMessage' }, ($, e) => {
     const { Text } = $.ui.resolve(e)
@@ -211,6 +246,7 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
   })
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('classic.Stop', () => ({}))
+  on('classic.PermissionRequest', () => ({}))
   on('agent.spawn', (_$, e) => {
     tasks.prompts.push(e.prompt)
 
@@ -238,6 +274,7 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
   return {
     clock,
     store,
+    reads,
     panes,
     efforts,
     bash,
@@ -248,6 +285,7 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
     model,
     hint,
     seat,
+    placed,
     github,
   }
 }
@@ -983,14 +1021,16 @@ test(
   async ($, on) => {
     const { clock, bash } = world(on)
     await $.session.start(SESSION)
+    // The finished job is a subagent's: a plan of the main thread's own would
+    // stop the one it has under way.
     const over = async (): Promise<void> => {
       bash.isError = true
       await $.tool.call({ tool: 'Bash', command: 'make', description: 'Build it' })
       bash.isError = false
-      await $.tool.call({ tool: 'mcp__deck__plan', title: 'Done job', steps: 'Only' })
-      await $.tool.call({ tool: 'mcp__deck__step', id: '1', state: 'done' })
+      await $.tool.call({ tool: 'mcp__deck__plan', title: 'Done job', steps: 'Only', agentId: 'agent-1' })
+      await $.tool.call({ tool: 'mcp__deck__step', id: '1', state: 'done', agentId: 'agent-1' })
     }
-    const isShown = async (): Promise<boolean> => (await paneTexts($)).includes('Done job')
+    const isShown = async (): Promise<boolean> => (await paneTexts($)).some((text) => text.startsWith('Done job'))
 
     await over()
     // A run still under way is kept by every clear.
@@ -1133,7 +1173,8 @@ test('the label joins a row another mod drew under the hint line, and its × sen
   await ui.unmount()
 
   expect(await run($, 'row')).toContain('on a row under the hint line')
-  expect(store.get('row-closed')).toBe(false)
+  // A switch turned off leaves the store.
+  expect(store.has('row-closed')).toBe(false)
 })
 
 /** One call of a transcript group, as the transcript hands it to a hook. */
@@ -1282,12 +1323,40 @@ test('a pane that waits undrawn is not up: a press opens it again and says why i
   // Neither press closed it: the pane is still asked for.
   expect([...panes]).toEqual(['deck'])
   expect(toasts.at(-1)).toBe("Deck's pane waits: 120 columns, 144 needed")
+  // A command says why in its answer, where it once said the pane was open.
+  expect(await run($, 'open')).toBe("Deck's pane waits: 120 columns, 144 needed")
 
   seat.isPlaced = true
   await ui.press({ key: 'deck' })
   expect([...panes]).toEqual([])
   await ui.unmount()
 })
+
+test(
+  'on a narrow terminal a press draws the pane at once, from the label and from a transcript row, with no word of waiting',
+  async ($, on) => {
+    const { panes, seat, placed, toasts } = world(on)
+    await $.session.start(SESSION)
+    seat.isNarrow = true
+
+    const ui = await $.ui.mount({ ...HINT, viewport: { ...FULLSCREEN, columns: 100 } })
+    await ui.press({ key: 'deck' })
+    expect([...placed]).toEqual(['deck'])
+    await ui.press({ key: 'deck' })
+    expect([...panes]).toEqual([])
+    await ui.unmount()
+
+    const group = await $.ui.mount({
+      ...GROUP,
+      surface: 'terminal',
+      props: { calls: [call('Bash', 'toolu_1', { command: 'make', description: 'Build it' })], isActive: false, isExpanded: false },
+    })
+    await group.press({ key: 'call:toolu_1' })
+    await group.unmount()
+    expect([...placed]).toEqual(['deck'])
+    expect(toasts).toEqual([])
+  },
+)
 
 const CHECKS = 'repos/acme/shop/commits/pull%2F12%2Fhead/check-runs?per_page=100'
 const STATUSES = 'repos/acme/shop/commits/pull%2F12%2Fhead/status?per_page=100'
@@ -1401,3 +1470,224 @@ test(
     expect(await run($, 'unwatch')).toBe('Deck stopped following GitHub: the runs stay where they stood.')
   },
 )
+
+test('a transcript row\'s clock runs while the pane is closed', async ($, on) => {
+  const { clock, bash, panes } = world(on)
+  await $.session.start(SESSION)
+  bash.result = { backgroundTaskId: 'task-3' }
+  await $.tool.call({ tool: 'Bash', command: 'daemon restart', description: 'Restart the daemon', run_in_background: true, tool_use_id: 'toolu_3' })
+  const calls = [call('Bash', 'toolu_3', { command: 'daemon restart', description: 'Restart the daemon' })]
+  const group = await $.ui.mount({ ...GROUP, surface: 'terminal', props: { calls, isActive: false, isExpanded: false } })
+
+  await clock.advance(5_000)
+  expect([...panes]).toEqual([])
+  expect((await group.findAll({ type: 'Text' })).map((text) => text.text)).toContain('5s')
+  await group.unmount()
+})
+
+test(
+  'a close in any session ends what runs here, stops what is followed on GitHub and wakes nobody',
+  { options: { github: true, modelTool: true } },
+  async ($, on) => {
+    const { clock, store, github } = world(on)
+    await $.session.start(SESSION)
+    github.answers[CHECKS] = { check_runs: [check('test', 'in_progress')] }
+    github.answers[STATUSES] = { statuses: [] }
+    github.answers['repos/acme/shop/pulls/12'] = { title: 'Fix the wallet' }
+    await $.tool.call({ tool: 'mcp__deck__watch', target: '12', wake: true })
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Ship it', steps: 'Build\nRelease' })
+    await $.agent.spawn({ ...SPAWN, description: 'deploy' })
+    expect(await tail($)).toContain('⏵ 1')
+
+    // Another session closes the deck: nothing is asked of GitHub from here on.
+    store.set('closed', true)
+    await clock.advance(2_000)
+    const asked = github.asked.length
+    github.answers[CHECKS] = { check_runs: [check('test', 'completed', 'success')] }
+    await clock.advance(5 * 60_000)
+    expect(github.asked.length).toBe(asked)
+    expect(github.submitted).toEqual([])
+
+    // Back: what ran stopped where it stood, so nothing runs on, now or later.
+    store.delete('closed')
+    await clock.advance(2_000)
+    expect(await tail($)).toBe('Fable 5.1')
+    await clock.advance(HOUR)
+    expect(await tail($)).toBe('Fable 5.1')
+    expect(await paneTexts($)).not.toContain('AGENTS · 1')
+  },
+)
+
+test(
+  'a shell the person is asked about waits with no clock, and its clock starts two seconds before Claude Code\'s hint',
+  async ($, on) => {
+    const { clock, bash } = world(on)
+    await $.session.start(SESSION)
+    bash.ms = 60_000
+    const call1 = $.tool.call({ tool: 'Bash', command: 'npm test', description: 'Run the tests', tool_use_id: 'toolu_ask' })
+    await clock.advance(1)
+    await $.classic.PermissionRequest({ tool_name: 'Bash', tool_input: { command: 'npm test' } })
+    await clock.advance(7_999)
+
+    expect(await paneTexts($)).toEqual(expect.arrayContaining(['?', 'Run the tests', 'waits']))
+    // It is not counted as running on the label.
+    expect(await tail($)).toBe('Fable 5.1')
+
+    // Allowed at 8 s, the hint is drawn at 10 s: the clock reads from 8 s.
+    await clock.advance(2_000)
+    const hint = await $.ui.mount({
+      plugin: 'deck',
+      surface: 'terminal',
+      component: 'ToolProgress',
+      requestId: 'toolu_ask',
+      props: { tool_use_id: 'toolu_ask', kind: 'background_hint', hint: '(ctrl+b to run in background)' },
+    })
+    await hint.unmount()
+    await clock.advance(1_000)
+    expect(await tail($)).toBe('Fable 5.1 · ⏵ 1')
+
+    await clock.advance(49_000)
+    await call1
+    expect(await paneTexts($)).toEqual(expect.arrayContaining(['RECENT', 'Run the tests', '52s']))
+  },
+)
+
+test(
+  'the label fits the screen: its run\'s title is cut, then the model goes, beside the docked pane and another mod\'s row',
+  { options: { modelTool: true } },
+  async ($, on) => {
+    const { clock, hint } = world(on)
+    await $.session.start(SESSION)
+    await step($, 'high')
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Ship the release to production', steps: 'Build\nTest\nShip' })
+    const label = async (columns: number): Promise<{ run: string; hasModel: boolean }> => {
+      const ui = await $.ui.mount({ ...HINT, viewport: { ...FULLSCREEN, columns } })
+      const run = face((await ui.find({ key: 'deck-run' }))?.props.label)
+      const hasModel = (await ui.find({ type: 'Text', text: 'Fable 5.1' })) !== undefined
+      expect(await ui.find({ key: 'deck-row-close' })).toBeDefined()
+      await ui.unmount()
+
+      return { run, hasModel }
+    }
+
+    expect(await label(120)).toEqual({ run: 'Ship the release to pro… 0/3', hasModel: true })
+    expect(await label(50)).toEqual({ run: 'Ship the release… 0/3', hasModel: true })
+    expect(await label(36)).toEqual({ run: 'Ship the rel… 0/3', hasModel: false })
+
+    // Docked, the pane takes its body's 64 cells and 3 more.
+    await run($, 'open')
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    await pane.unmount()
+    await clock.advance(1_000)
+    expect(await label(117)).toEqual({ run: 'Ship the release… 0/3', hasModel: true })
+
+    // Another mod's row of 11 cells, 2 apart, shares the line.
+    expect(await run($, '')).toBe('Deck pane closed.')
+    await clock.advance(1_000)
+    hint.row = 'timer 18:42'
+    expect(await label(63)).toEqual({ run: 'Ship the release… 0/3', hasModel: true })
+  },
+)
+
+test('a transcript row\'s title is cut to the conversation\'s width', async ($, on) => {
+  world(on)
+  await $.session.start(SESSION)
+  const title = 'Build every package of the workspace and run the tests'
+  const calls = [call('Bash', 'toolu_w', { command: 'make', description: title })]
+  const titleAt = async (columns: number): Promise<string> => {
+    const group = await $.ui.mount({ ...GROUP, surface: 'terminal', viewport: { ...FULLSCREEN, columns }, props: { calls, isActive: false, isExpanded: false } })
+    const label = String((await group.find({ key: 'call:toolu_w' }))?.props.label)
+    await group.unmount()
+
+    return label
+  }
+
+  expect(await titleAt(120)).toBe(title)
+  expect(await titleAt(40)).toBe(`${title.slice(0, 26)}…`)
+})
+
+test('above the prompt the pane lists the three newest ended jobs and counts the rest', async ($, on) => {
+  const { bash } = world(on)
+  await $.session.start(SESSION)
+  bash.isError = true
+
+  for (const name of ['one', 'two', 'three', 'four', 'five']) {
+    await $.tool.call({ tool: 'Bash', command: name, description: name })
+  }
+
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, placement: 'inline' } })
+  const titles = (await pane.findAll({ type: 'Button' })).map((button) => String(button.props.label))
+  const texts = (await pane.findAll({ type: 'Text' })).map((text) => text.text)
+  await pane.unmount()
+  expect(titles).toEqual(expect.arrayContaining(['five', 'four', 'three']))
+  expect(titles).not.toContain('two')
+  expect(texts).toEqual(expect.arrayContaining(['+2 more', '$1.24 · 5h 34% · 7d 12%']))
+  // Beside the conversation all of them are listed.
+  expect(await paneTexts($)).toEqual(expect.arrayContaining(['one', 'two']))
+})
+
+test(
+  'a new plan stops the loop\'s old one, and a subagent cannot move a plan it did not open',
+  { options: { modelTool: true } },
+  async ($, on) => {
+    const { clock } = world(on)
+    await $.session.start(SESSION)
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Left behind', steps: 'One\nTwo' })
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Current', steps: 'Alpha\nBeta' })
+
+    const refused = await $.tool.call({ tool: 'mcp__deck__step', id: '2', state: 'start', agentId: 'agent-1' })
+    expect(refused.deny).toBe('No plan of yours is open. Call plan first, or name its run.')
+
+    // The stopped plan leaves with what is over; the current one stays.
+    await clock.advance(HOUR / 2 + 60_000)
+    const texts = await paneTexts($)
+    expect(texts).not.toContain('Left behind')
+    expect(texts).toEqual(expect.arrayContaining(['Current', 'Alpha']))
+  },
+)
+
+test(
+  'a step opened in a run under way stays open through a clear, and a run that takes a freed id starts with no folds',
+  { options: { modelTool: true } },
+  async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    const long = 'Move every table of the old schema to the new one'
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Migrate', steps: `${long}\nVerify` })
+    // Narrow, the step's title is cut and opens to the whole of it.
+    const narrow = { ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 36 } } as const
+    const pane = await $.ui.mount(narrow)
+    await pane.press({ key: 'step-mark:r1/1' })
+    await pane.unmount()
+    // A finished subagent's run gives the clear something to take.
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Side', steps: 'Only', agentId: 'agent-1' })
+    await $.tool.call({ tool: 'mcp__deck__step', id: '1', state: 'done', agentId: 'agent-1' })
+    await run($, 'clear')
+    const after = await $.ui.mount(narrow)
+    expect((await after.findAll({ type: 'Text' })).map((text) => text.text)).toContain(long)
+    // Folded by the person, then finished and pushed out by six newer runs.
+    await after.press({ key: 'fold:r1' })
+    await after.unmount()
+    await $.tool.call({ tool: 'mcp__deck__step', id: '2', state: 'done' })
+    await $.tool.call({ tool: 'mcp__deck__step', id: '1', state: 'done' })
+
+    for (const title of ['A', 'B', 'C', 'D', 'E', 'F']) {
+      await $.tool.call({ tool: 'mcp__deck__plan', title, steps: 'Only' })
+      await $.tool.call({ tool: 'mcp__deck__step', id: '1', state: 'done' })
+    }
+
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Fresh', steps: 'First\nSecond' })
+    expect(await paneTexts($)).toEqual(expect.arrayContaining(['Fresh', 'First', 'Second']))
+  },
+)
+
+test('the switches every session shares cost one read of the store while none is set', async ($, on) => {
+  const { clock, reads } = world(on)
+  await $.session.start(SESSION)
+  await clock.advance(10_000)
+  expect(reads).toEqual([])
+
+  expect(await run($, 'row')).toContain('as text')
+  await clock.advance(2_000)
+  expect(reads).toEqual(['row-closed'])
+})

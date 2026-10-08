@@ -311,7 +311,13 @@ export const givenUp = (watch: Watch, run: Run, at: number): string | undefined 
     return at - watch.startedAt >= EMPTY_MS ? 'no check showed up' : undefined
   }
 
-  return at - Math.max(run.touchedAt, watch.startedAt) >= STALL_MS ? 'no check moved for half an hour' : undefined
+  // A check that runs holds the watch however long it takes, up to the two
+  // hours; a stall is checks that wait and none that runs.
+  const isRunning = run.steps.some((step) => step.status === 'running')
+
+  return !isRunning && at - Math.max(run.touchedAt, watch.startedAt) >= STALL_MS
+    ? 'no check moved for half an hour'
+    : undefined
 }
 
 const MAX_NAMED = 8

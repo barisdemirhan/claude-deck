@@ -205,15 +205,23 @@ export const stepped = (
 
 /**
  * The runs with a loop's new plan. The task list the loop was following goes:
- * the plan tells the same job with its levels.
+ * the plan tells the same job with its levels. A plan of the loop's that is
+ * still under way stops where it stands: the loop has moved on to another
+ * job, and nothing would end the old one.
  */
 export const replanned = (runs: readonly Run[], run: Run): Run[] =>
   opened(
-    runs.filter((one) => !(one.feed === 'tasks' && one.loop === run.loop && isLive(one))),
+    runs
+      .filter((one) => !(one.feed === 'tasks' && one.loop === run.loop && isLive(one)))
+      .map((one) => (one.feed === 'plan' && one.loop === run.loop && isLive(one) ? halted(one, run.touchedAt) : one)),
     run,
   )
 
-/** The newest run the loop may mean: its own newest unfinished plan, else its newest. */
+/**
+ * The plan a loop's step is for: the one named, else the loop's newest
+ * unfinished plan, else its newest. Never another loop's by itself: a
+ * subagent with no plan of its own would move the main thread's.
+ */
 export const planOf = (runs: readonly Run[], loop: string, id: string): Run | undefined => {
   const plans = runs.filter((run) => run.feed === 'plan')
 
@@ -223,7 +231,7 @@ export const planOf = (runs: readonly Run[], loop: string, id: string): Run | un
 
   const own = plans.filter((run) => run.loop === loop)
 
-  return own.findLast((run) => !isFinished(leavesOf(run))) ?? own.at(-1) ?? plans.at(-1)
+  return own.findLast((run) => !isFinished(leavesOf(run))) ?? own.at(-1)
 }
 
 /**
@@ -320,21 +328,44 @@ export const stopped = (
   loop: string,
   at: number,
   isAnswered = false,
-): Run[] =>
-  runs.map((run) => {
-    if (run.loop !== loop || !isLive(run)) {
-      return run
-    }
+): Run[] => runs.map((run) => (run.loop !== loop || !isLive(run) ? run : halted(run, at, isAnswered)))
 
-    const steps = run.steps.map((step) =>
-      step.status === 'running' && isLeaf(run, step.id)
-        ? { ...step, status: isAnswered ? ('done' as const) : ('pending' as const), endedAt: at }
-        : step,
-    )
-    const left = { ...run, steps, touchedAt: at }
+/** One live run stopped where it stands, as `stopped` stops a loop's. */
+const halted = (run: Run, at: number, isAnswered = false): Run => {
+  const steps = run.steps.map((step) =>
+    step.status === 'running' && isLeaf(run, step.id)
+      ? { ...step, status: isAnswered ? ('done' as const) : ('pending' as const), endedAt: at }
+      : step,
+  )
+  const left = { ...run, steps, touchedAt: at }
 
-    return isFinished(leavesOf(left)) ? left : { ...left, stoppedAt: at }
-  })
+  return isFinished(leavesOf(left)) ? left : { ...left, stoppedAt: at }
+}
+
+/**
+ * Every run still under way stops where it stands: the deck was closed and
+ * hears no step from now on. A step a loop calls later moves its run again.
+ */
+export const stoppedAll = (runs: readonly Run[], at: number): Run[] =>
+  runs.map((run) => (isLive(run) ? halted(run, at) : run))
+
+/** The run a fold's key belongs to: `r1` of `r1`, `r1/2.1` and `step:r1/2.1`. */
+const runOfFold = (key: string): string => key.replace(/^step:/, '').split('/')[0] ?? ''
+
+/**
+ * The folds of what is still shown: a job's by its id, a run's, a branch's
+ * and a step's by their run. A run that takes a freed id starts with none.
+ */
+export const keptFolds = (
+  folds: Readonly<Record<string, boolean>>,
+  runs: readonly Run[],
+  jobIds: readonly string[],
+): Record<string, boolean> =>
+  Object.fromEntries(
+    Object.entries(folds).filter(([key]) =>
+      key.startsWith('job:') ? jobIds.includes(key.slice('job:'.length)) : runs.some((run) => run.id === runOfFold(key)),
+    ),
+  )
 
 /** The runs that can still move: what a clear leaves, or those touched since a time. */
 export const swept = (runs: readonly Run[], before = Number.POSITIVE_INFINITY): Run[] =>
@@ -370,12 +401,18 @@ export const activeOf = (runs: readonly Run[]): Run | undefined =>
       undefined,
     )
 
-/** `Auth renewal 5/8`, for the label. */
-export const runText = (run: Run): string => {
+/** How many of a run's title the label shows at most. */
+export const RUN_TITLE_CELLS = 24
+
+/** `5/8`: a run's leaves done of all. */
+export const runCount = (run: Run): string => {
   const leaves = leavesOf(run)
 
-  return `${cut(run.title, 24)} ${doneOf(leaves)}/${leaves.length}`
+  return `${doneOf(leaves)}/${leaves.length}`
 }
+
+/** `Auth renewal 5/8`, for the label: the title cut to `chars`. */
+export const runText = (run: Run, chars = RUN_TITLE_CELLS): string => `${cut(run.title, chars)} ${runCount(run)}`
 
 /** One drawn row of a run: the run itself, a branch or a leaf. */
 export type Row = {

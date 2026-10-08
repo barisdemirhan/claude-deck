@@ -2,6 +2,7 @@ import { expect, test } from 'claude-code/testing'
 
 import {
   EMPTY_MS,
+  GIVE_UP_MS,
   STALL_MS,
   checksOf,
   givenUp,
@@ -125,4 +126,11 @@ test('a run waits for its first check, then ends once every check stays over', a
   expect(summaryOf(watched(waiting, over, 3000), WATCH.url)).toBe(
     'The GitHub checks of "Checks · main" are over: 0 passed, 1 failed.\n✗ test\nhttps://github.com/acme/shop/commits/main',
   )
+})
+
+test('a check that runs holds the watch past half an hour, up to the two hours', async () => {
+  const empty = runOf('r1', 'Checks · main', 'checks', 'watch:r1', '', [], 0)
+  const long = watched(empty, checksOf('ref', { check_runs: [{ name: 'e2e', status: 'in_progress' }] }, {}), 5000)
+  expect(givenUp(WATCH, long, 5000 + STALL_MS)).toBeUndefined()
+  expect(givenUp(WATCH, long, GIVE_UP_MS)).toBe('still not over after two hours')
 })

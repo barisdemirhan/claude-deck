@@ -27,11 +27,11 @@ Nothing has to change. This repository is a marketplace of its own too, and `dec
 
 | Command | What it does |
 | --- | --- |
-| `/deck` | Opens the pane, or closes the open one. `/deck open` only opens it. It asks for 52 columns beside the conversation; a width you drag it to stands. Where Claude Code keeps the pane waiting undrawn, a toast says why |
+| `/deck` | Opens the pane, or closes the open one. `/deck open` only opens it. It asks for 52 columns beside the conversation; a width you drag it to stands. Opened by you, with a command or a press, it is drawn at any width: beside the conversation in the fullscreen layout from 110 columns, else above the prompt. Where Claude Code still keeps it waiting undrawn (a surface that draws no panes), the answer or a toast says why |
 | `/deck watch` | With **GitHub checks** on, follows the checks of the branch you are on. `/deck watch 12` follows a pull request, and a workflow run's id, a branch, a commit or a page's address on GitHub works the same. `/deck unwatch` stops following; the runs stay where they stood. See [GitHub checks](#github-checks) |
 | `/deck clear` | Takes what is over out of the pane: the ended shells and agents, and the runs that finished or stopped. What still runs stays |
 | `/deck row` | Keeps the label as text on the hint line, or brings its row back. The row's `×` does the first. Every open session follows within two seconds |
-| `/deck close` | Takes the deck away in every open session within two seconds: the label, the pane, the reading of shell calls and the effort it set. `/deck exit` and `/deck quit` do the same; `/deck` brings it back |
+| `/deck close` | Takes the deck away in every open session within two seconds: the label, the pane, the reading of shell calls, what it follows on GitHub and the effort it set. What was running ends where it stood, since the deck sees no end while it is closed. `/deck exit` and `/deck quit` do the same; `/deck` brings it back |
 
 ### The label
 
@@ -39,16 +39,16 @@ Under the prompt the deck keeps one label: the model, its effort, how many shell
 
 <img src="docs/label.png" width="604" alt="The conversation with the pane closed: under a group of three shell commands, a row for each with its mark and time; under the prompt, the deck's label with its mark, the model, the effort in its level's color, the count of what runs, the run under way and a close mark">
 
-Where there is a pointer, the terminal's fullscreen layout or the desktop app, the label is a row of its own right under the hint line, and it begins with the deck's mark, `◨`: a press on it opens or closes the pane, and so does a press on the run at the row's end. The model's name between them is plain text. Its effort is drawn in its level's color, and a press on the level's name steps it up, as on the pane's meter. What runs has the color of a running row, a failed step's `✗` is red, the rest is dim. `×` closes the row: the label is then text on the hint line. Where another mod has already drawn a row of its own there, the label joins that row at its end, so the two take one row between them. The model follows `/model` within two seconds; its effort shows again with its first request. On the terminal's main screen it is text at the end of the hint line. The **Hint label** setting keeps it text everywhere, or takes it off.
+Where there is a pointer, the terminal's fullscreen layout or the desktop app, the label is a row of its own right under the hint line, and it begins with the deck's mark, `◨`: a press on it opens or closes the pane, and so does a press on the run at the row's end. The model's name between them is plain text. Its effort is drawn in its level's color, and a press on the level's name steps it up, as on the pane's meter. What runs has the color of a running row, a failed step's `✗` is red, the rest is dim. `×` closes the row: the label is then text on the hint line. Where another mod has already drawn a row of its own there, the label joins that row at its end, so the two take one row between them. The row fits what the screen leaves it beside the docked pane and another mod's row: the run's title is cut first, then the model's name goes, then the run, so `×` stays on the screen. A shell Claude Code asks you about is not counted as running. The model follows `/model` within two seconds; its effort shows again with its first request. On the terminal's main screen it is text at the end of the hint line. The **Hint label** setting keeps it text everywhere, or takes it off.
 
 ### The pane
 
 | Part | What it shows |
 | --- | --- |
-| The first rows | The main thread's model, its effort meter, and how full the context window is. Under them what the session cost and how full each rate limit is (`$1.24 · 5h 34% · 7d 12%`) |
-| `SHELLS` and `AGENTS` | Each shell command and each subagent that runs now, in a section of its own, with how long it has run. Each row starts with `▸` closed or `▾` open, before its state mark. A title too long for its row is cut with `…`. A shell is named by what its call says it does, or by the first line of its command where the call says nothing; a subagent by its type and task, as `general-purpose(Ship the release)`. What a running agent started, its own shells and agents and the run it opened, is drawn under its row |
+| The first rows | The main thread's model, its effort meter, and how full the context window is. Under them what the session cost and how full each rate limit is (`$1.24 · 5h 34% · 7d 12%`); above the prompt, where the pane has few rows, these share the first row while it has room |
+| `SHELLS` and `AGENTS` | Each shell command and each subagent that runs now, in a section of its own, with how long it has run. Each row starts with `▸` closed or `▾` open, before its state mark. A title too long for its row is cut with `…`. A shell is named by what its call says it does, or by the first line of its command where the call says nothing; a subagent by its type and task, as `general-purpose(Ship the release)`. What a running agent started, its own shells and agents and the run it opened, is drawn under its row. A shell Claude Code asks you about shows `?` and `waits`, with no clock, until it runs: its time starts when it does, two seconds before Claude Code draws its ctrl+b hint under it |
 | The runs | Each job's steps as a tree, between the two lists. See below |
-| `RECENT` | The last eight that ended: `✓` done, `✗` failed, `■` stopped, `·` ended with no word on how. A foreground command that went well in under three seconds is left out |
+| `RECENT` | The last eight that ended: `✓` done, `✗` failed, `■` stopped, `·` ended with no word on how. A foreground command that went well in under three seconds is left out. Above the prompt the newest three are listed and the rest counted, `+5 more` |
 
 A press on a row's mark or title opens its detail under it, and another closes it. If the title was cut, its full text comes first, wrapped over as many lines as it needs; a title that fits is not repeated. Under that is a shell's command, its first line, wrapped and bounded to eight lines' worth of characters with a final `…` where it is cut, or an agent's model and effort. An open title is no longer dim. Where the job runs in the background, a line under the detail has a `■ stop` button, which asks Claude Code to stop that task as its own TaskStop tool does. `× clear` on the pane's last line does what `/deck clear` does. What is over also leaves the pane by itself after half an hour.
 
@@ -65,11 +65,11 @@ Ran 3 shell commands
   ⏵ Restart the daemon         14s
 ```
 
-Each row is that call's own: matched by the call's id, in the order Claude made them, with the state the transcript gives it. A command that went to the background keeps `⏵` and its time until it ends. A press on a title opens the pane with that command's row open. Past four commands the rest are counted, `+2 more`. Claude Code's own line stays as it is, other tools get no row, and a group you expand with ctrl+o is left alone. The **Transcript rows** setting turns them off.
+Each row is that call's own: matched by the call's id, in the order Claude made them, with the state the transcript gives it. A command that went to the background keeps `⏵` and its time until it ends, its time running whether the pane is open or not. A title is cut to the conversation's width beside a docked pane, and to 56 cells at most. A press on a title opens the pane with that command's row open. Past four commands the rest are counted, `+2 more`. Claude Code's own line stays as it is, other tools get no row, and a group you expand with ctrl+o is left alone. The **Transcript rows** setting turns them off.
 
 ### Runs
 
-A run is one job's steps, with how many are done and how long each took. The deck keeps the last six. When the subagent that opened a run ends, the run's clock stops and a step it left running goes back to waiting.
+A run is one job's steps, with how many are done and how long each took. The deck keeps the last six. When the subagent that opened a run ends, the run's clock stops and a step it left running goes back to waiting. When an agent opens a new plan, the one it had under way stops the same way: the agent moved on, and nothing would end it.
 
 A loop shows one run at a time: when an agent opens a plan, the task list it was following leaves the pane, and its later tasks open none while the plan is under way. `/clear` takes every run away with the conversation.
 
@@ -87,7 +87,7 @@ Only the steps at the ends of the tree have a state. A branch's state, its count
 With **Tool for Claude** on, Claude can call two tools:
 
 - `plan` takes a job's title and its steps as indented text, one step a line, and opens a run. Each line gets an id from its place: `1`, `1.2`, `1.2.1`.
-- `step` moves one step: `start`, `done` or `fail`. Starting a step ends any step still running before it in the plan, in the same branch or an earlier one, so moving on is one call. The first step starts with the plan, and a subagent's last step is done by itself when the agent answers, so a job of three stages costs an agent four calls: one to load the tools, the plan, and two moves. The note below also tells agents to skip the tree for a short job. The deck keeps the times; Claude never sends one.
+- `step` moves one step: `start`, `done` or `fail`. Starting a step ends any step still running before it in the plan, in the same branch or an earlier one, so moving on is one call. The first step starts with the plan, and a subagent's last step is done by itself when the agent answers, so a job of three stages costs an agent four calls: one to load the tools, the plan, and two moves. The note below also tells agents to skip the tree for a short job. The deck keeps the times; Claude never sends one. An agent moves its own plan; another's only by naming its run.
 
 Every agent of the session gets them with that one setting: the main thread and each subagent alike, of any type, with no line added to an agent's definition. So that an agent uses them without being asked, the same setting adds one note, the same words in two places: as a section of the main thread's system prompt, and at the end of the task each subagent is given.
 
@@ -117,7 +117,7 @@ With **GitHub checks** on, the deck follows checks on GitHub and shows them as a
 
 A number of eight digits or more is read as a workflow run's id, a shorter one as a pull request's. A check that was skipped, cancelled or timed out says so beside its name; a skipped one counts as passed.
 
-The deck asks GitHub every 30 seconds while something is followed, four things at most. A pull request's or a commit's checks are over once two polls in a row find each one over, since a later workflow may still add its own; a workflow run is over when GitHub says so. A watch is given up when no check shows up in ten minutes, when no check moves for half an hour (a job that waits on a runner or an approval may wait for good), after two hours in all, or when GitHub does not answer five times in a row: its run stops where it stands, a toast says why, and Claude is told where it asked to be woken. One question to GitHub may take 20 seconds. A toast tells you of a failed check and of the end, as for any run.
+The deck asks GitHub every 30 seconds while something is followed, four things at most. A pull request's or a commit's checks are over once two polls in a row find each one over, since a later workflow may still add its own; a workflow run is over when GitHub says so. A watch is given up when no check shows up in ten minutes, when no check moves for half an hour while none runs (a job that waits on a runner or an approval may wait for good; one that runs holds the watch however long it takes), after two hours in all, or when GitHub does not answer five times in a row: its run stops where it stands, a toast says why, and Claude is told where it asked to be woken. One question to GitHub may take 20 seconds. A toast tells you of a failed check and of the end, as for any run.
 
 **How it asks.** With the [`gh`](https://cli.github.com) command installed and signed in, the deck runs `gh api` for each question, so it holds no token and a company's own GitHub host works. Where there is no `gh`, or nobody is signed in to it, it asks `api.github.com` directly: with the token in `GH_TOKEN` or `GITHUB_TOKEN` where one is set, and with none for a public repository, then every two and a half minutes, as GitHub answers a nameless caller 60 requests an hour. Every question is a read. A host other than `github.com` needs `gh`, and `gh` runs only where Claude Code runs commands for a mod, which is the terminal.
 
@@ -147,9 +147,9 @@ In Claude Code's `/config` menu, under the plugin's name:
 
 ## Requirements
 
-- A Claude Code build with mod support (plugins that ship a hooks module). Built and tested on 2.1.289. Mods sit behind a rollout switch, so if `/deck` does not show up after installing, the switch may still be off for you.
+- A Claude Code build with mod support (plugins that ship a hooks module). Built on 2.1.289 and tested on 2.1.295. Mods sit behind a rollout switch, so if `/deck` does not show up after installing, the switch may still be off for you.
 - The terminal or the desktop app: the label and the pane are drawn only there. A press needs a pointer: the terminal's fullscreen layout or the desktop app. On the terminal's main screen the commands do it all.
-- The pane fits its rows to the width it gets: a long title is cut first, and the context meter moves to a row of its own when the first row is full. Under 44 columns a run loses its bar and keeps its count; under 36 a row loses its `shell` or `agent`.
+- The pane fits its rows to the width it gets: a long title is cut first, and the context meter moves to a row of its own when the first row is full. Under 44 columns a run loses its bar and keeps its count; under 36 a row loses its `shell` or `agent`. The label's row and the transcript's rows fit the screen too, as told above.
 
 ## Privacy and data handling
 
@@ -165,6 +165,8 @@ The mod registers one slash command, adds one label under the prompt, adds rows 
 - Of each model request: the model, the effort, and whether a subagent made it. Not the conversation.
 - Of the row Claude Code draws when a background task ends: the task's id, how it ended and how long it ran. Not the row's text.
 - When Claude stops: the ids of the background tasks still running.
+- When Claude Code asks you whether a shell may run: the tool's name and the first line of its command, to find that shell's row. Nothing else of the dialog, and not your answer.
+- When Claude Code draws its ctrl+b hint under a shell: the call's id, which says the shell runs.
 - From Claude Code: the main thread's model, how full the context window is, what the session cost and how full its rate limits are.
 - With **GitHub checks** on, when a watch starts: the address of the session's `origin` remote, for the repository's host and name, and for a watch with no target the name of the branch you are on. Of GitHub's answers: a pull request's title; a workflow run's name, title and state; each check's, job's and step's name, state and times. The names are cut to 80 characters and kept in memory as a run. With no `gh`, the value of `GH_TOKEN` or `GITHUB_TOKEN`, to send it to GitHub with each question.
 

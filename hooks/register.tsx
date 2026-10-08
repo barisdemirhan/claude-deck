@@ -35,14 +35,17 @@ import {
   seen,
   stepped,
 } from './meter'
-import { beside, groupTree, labelRow, paneTree } from './pane'
-import type { CallRow } from './pane'
+import { beside, besideCells, fittedLabel, groupTree, labelRow, paneTree } from './pane'
+import type { CallRow, LabelView } from './pane'
 import {
+  RUN_TITLE_CELLS,
   activeOf,
   isLive,
+  keptFolds,
   newsOf,
   opened,
   stopped,
+  stoppedAll,
   swept,
   leavesOf,
   planOf,
@@ -50,6 +53,7 @@ import {
   planned,
   replanned,
   rowsOf,
+  runCount,
   runOf,
   runText,
   statusOf as statusOfSteps,
@@ -63,10 +67,13 @@ import { GLYPHS, jobSpan, labelText, spanText } from './view'
 import {
   NO_WORK,
   agentTitle,
+  asked as askedAbout,
   backgrounded,
+  begun,
   cleared,
   dropped,
   ended,
+  endedAll,
   reported,
   revived,
   settled,
@@ -119,6 +126,11 @@ const NO_WATCHES: Watch[] = []
 const watches = atom({ plugin: 'deck', key: 'watches' } as const, NO_WATCHES)
 const NO_SPANS: Record<string, number> = {}
 const spans = atom({ plugin: 'deck', key: 'spans' } as const, NO_SPANS)
+const docked = atom({ plugin: 'deck', key: 'docked' } as const, 0)
+/** A docked pane's frame around its body, and the cell between it and the conversation. */
+const DOCK_FRAME_CELLS = 3
+/** A shell Claude Code draws its ctrl+b hint under has run this long. */
+const HINT_MS = 2000
 /** How many shell commands' lengths are kept for the transcript's rows. */
 const SPANS_KEPT = 60
 
@@ -134,40 +146,80 @@ const isClosed = async ($: EngineInterface): Promise<boolean> =>
 const isPaneUp = async ($: EngineInterface): Promise<boolean> =>
   (await $.ui.panes().catch(() => [])).some((pane) => pane.id === PANE && pane.isPlaced)
 
+const PANE_OPENED = 'Deck pane opened.'
+const PANE_CLOSED = 'Deck pane closed.'
+
 /**
- * Opens the pane, and says why where Claude Code keeps it waiting undrawn,
- * so a press that opened nothing is not silent.
+ * Opens the pane. Resolves what to tell the person: that it is open, or why
+ * Claude Code keeps it waiting undrawn.
  */
-const paneOpened = async ($: EngineInterface): Promise<void> => {
+const paneOpened = async ($: EngineInterface): Promise<string> => {
   const answer = await $.ui.open(PANE_OPEN)
 
-  if (!answer.isPlaced) {
-    $.ui.toast(`Deck's pane waits: ${answer.reason}`)
-  }
+  return answer.isPlaced ? PANE_OPENED : `Deck's pane waits: ${answer.reason}`
+}
+
+/** The meter with the effort handed back to Claude Code. */
+const unheld = (kept: Meter): Meter => held(kept, '')
+
+/**
+ * What closing takes away in this session, whichever session closed it: the
+ * pane, the effort the deck set and what it follows on GitHub. What runs
+ * ends where it stands: the deck reads nothing while it is closed, so a job
+ * or a run left running would run on in the pane when it came back.
+ */
+const shutDown = async ($: EngineInterface): Promise<void> => {
+  await $.ui.close({ id: PANE }).catch(() => undefined)
+  await update($, meter, unheld)
+  await update($, watches, () => [])
+  const at = await $.clock.now()
+  await update($, work, (kept) => endedAll(kept, at))
+  await update($, runs, (kept) => stoppedAll(kept, at))
 }
 
 /**
  * Keeps `/deck close` or its undoing for every session and takes it up here
- * at once. Closed, the pane goes and the effort is Claude Code's own again.
+ * at once.
  */
-/** The meter with the effort handed back to Claude Code. */
-const unheld = (kept: Meter): Meter => held(kept, '')
-
 const closedAs = async ($: EngineInterface, isOff: boolean): Promise<void> => {
-  await $.store.set(CLOSED, isOff)
+  await switched($, CLOSED, isOff)
   await update($, switches, (kept) => ({ ...kept, isClosed: isOff }))
 
   if (isOff) {
-    await $.ui.close({ id: PANE }).catch(() => undefined)
-    await update($, meter, (kept) => held(kept, ''))
-    await update($, watches, () => [])
+    await shutDown($)
   }
+}
+
+/**
+ * Whether a switch of every session's is on. Read every two seconds in every
+ * session, so the store is listed first and a key read only where it is set:
+ * one read of the store's file where there were two. A key an older version
+ * left `false` is taken away on the way.
+ */
+const isSet = async ($: EngineInterface, keys: readonly string[], key: string): Promise<boolean> => {
+  if (!keys.includes(key)) {
+    return false
+  }
+
+  const isOn = (await $.store.get(key)) === true
+
+  if (!isOn) {
+    await $.store.delete(key).catch(() => undefined)
+  }
+
+  return isOn
+}
+
+/** Sets a switch of every session's: kept while on, taken away when off. */
+const switched = async ($: EngineInterface, key: string, isOn: boolean): Promise<void> => {
+  await (isOn ? $.store.set(key, true) : $.store.delete(key))
 }
 
 /** Takes up a `/deck close` another session made, or its undoing. */
 const followed = async ($: EngineInterface): Promise<void> => {
-  const isOff = (await $.store.get(CLOSED)) === true
-  const isRowOff = (await $.store.get(ROW_CLOSED)) === true
+  const keys = await $.store.keys()
+  const isOff = await isSet($, keys, CLOSED)
+  const isRowOff = await isSet($, keys, ROW_CLOSED)
   const before = await read($, switches)
 
   if (isOff === before.isClosed && isRowOff === before.isRowClosed) {
@@ -177,8 +229,7 @@ const followed = async ($: EngineInterface): Promise<void> => {
   await update($, switches, () => ({ isClosed: isOff, isRowClosed: isRowOff }))
 
   if (isOff && !before.isClosed) {
-    await $.ui.close({ id: PANE }).catch(() => undefined)
-    await update($, meter, (kept) => unheld(kept))
+    await shutDown($)
   }
 }
 
@@ -187,29 +238,45 @@ const followed = async ($: EngineInterface): Promise<void> => {
  * label is text at the end of the hint line.
  */
 const rowClosedAs = async ($: EngineInterface, isOff: boolean): Promise<void> => {
-  await $.store.set(ROW_CLOSED, isOff)
+  await switched($, ROW_CLOSED, isOff)
   await update($, switches, (kept) => ({ ...kept, isRowClosed: isOff }))
+}
+
+/** Opens the pane, or closes the open one. Resolves what to tell the person. */
+const toggled = async ($: EngineInterface): Promise<string> => {
+  if (await isPaneUp($)) {
+    await $.ui.close({ id: PANE })
+
+    return PANE_CLOSED
+  }
+
+  return paneOpened($)
+}
+
+/**
+ * A press that opens or closes the pane says nothing but where the pane
+ * waits, so a press that drew nothing is not silent.
+ *
+ * A Button hands the promise back to the press: Claude Code draws a pane at
+ * any width only while the person's press is answered, and counts the
+ * press as answered until its handler's promise settles. A press that
+ * returned at once and opened the pane after an await (`toggled` asks
+ * whether it is up first) made an open of the deck's own, which waits
+ * undrawn below 144 columns.
+ */
+const pressed = async ($: EngineInterface, said: Promise<string>): Promise<void> => {
+  const text = await said
+
+  if (text !== PANE_OPENED && text !== PANE_CLOSED) {
+    $.ui.toast(text)
+  }
 }
 
 /** A press on a transcript row: the pane opens with that command's row open. */
 const shown = async ($: EngineInterface, id: string): Promise<void> => {
-  // The pane first, while the press is what asks for it.
-  const opening = paneOpened($)
+  const opening = pressed($, paneOpened($))
   await update($, folds, (kept) => ({ ...kept, [`job:${id}`]: true }))
   await opening
-}
-
-/** Opens the pane, or closes the open one. Resolves whether it is open now. */
-const toggled = async ($: EngineInterface): Promise<boolean> => {
-  if (await isPaneUp($)) {
-    await $.ui.close({ id: PANE })
-
-    return false
-  }
-
-  await paneOpened($)
-
-  return true
 }
 
 /** What Claude Code measured of the session: the context's fill, the cost, the rate limits. */
@@ -253,6 +320,18 @@ const named = async ($: EngineInterface): Promise<void> => {
   }
 }
 
+/** The folds of what is no longer shown go, so a run that takes a freed id starts with none. */
+const foldsPruned = async ($: EngineInterface): Promise<void> => {
+  const shown = await read($, runs)
+  const jobs = await read($, work)
+  const ids = [...jobs.running, ...jobs.recent].map((job) => job.id)
+  const before = await read($, folds)
+
+  if (Object.keys(keptFolds(before, shown, ids)).length !== Object.keys(before).length) {
+    await update($, folds, (kept) => keptFolds(kept, shown, ids))
+  }
+}
+
 /** `/deck clear` and the pane's button: what is over leaves the pane. */
 const sweptAway = async ($: EngineInterface, before?: number): Promise<void> => {
   const jobs = await read($, work)
@@ -263,16 +342,10 @@ const sweptAway = async ($: EngineInterface, before?: number): Promise<void> => 
   }
 
   if (swept(all, before).length !== all.length) {
-    const left = await update($, runs, (kept) => swept(kept, before))
-    // A fold is kept only for a run that is still shown.
-    await update($, folds, (kept) =>
-      Object.fromEntries(
-        Object.entries(kept).filter(
-          ([key]) => key.startsWith('job:') || left.some((run) => key.split('/')[0] === run.id),
-        ),
-      ),
-    )
+    await update($, runs, (kept) => swept(kept, before))
   }
+
+  await foldsPruned($)
 }
 
 /** The name a run a subagent opened carries: the agent's own, else its type. */
@@ -311,6 +384,10 @@ type Session = {
   ticks: number
   minted: number
   lengths: Map<string, { status: string; ms: number }>
+  /** When Claude Code drew its ctrl+b hint under a shell, by its call's id: that shell runs. */
+  hints: Map<string, number>
+  /** The cells the pane took from the screen as it was last drawn docked; 0 drawn inline. */
+  dockCells: number
   hasTool: boolean
   hasToasts: boolean
   hasRows: boolean
@@ -488,6 +565,7 @@ const watching = async (
 
   const pull = target.pull > 0 ? await asked($, session, target.host, pullPath(target)) : undefined
   const at = await $.clock.now()
+  await foldsPruned($)
   const id = freeId(await read($, runs), at)
   const title = pull?.data === undefined ? target.title : pullTitle(target, pull.data)
   const run = watched(runOf(id, title, 'checks', `watch:${id}`, '', [], at), found, at)
@@ -561,7 +639,8 @@ const polledAll = async ($: EngineInterface, session: Session): Promise<void> =>
       told($, session, `${GLYPHS.killed} ${current.title}: ${why}`)
     }
 
-    if (wake) {
+    // A deck closed meanwhile wakes nobody.
+    if (wake && !(await isClosed($))) {
       await $.prompt.submit({ text: summaryOf(current, watch.url, why) }).catch(() => undefined)
     }
   }
@@ -635,17 +714,41 @@ const ticked = async ($: EngineInterface, session: Session): Promise<void> => {
     await sweptAway($, (await $.clock.now()) - STALE_MS)
   }
 
-  const isBusy =
-    (await read($, work)).running.length > 0 || (await read($, runs)).some(isLive)
+  // A shell Claude Code drew its ctrl+b hint under runs: one the person was
+  // asked about started its clock that long before.
+  if (session.hints.size > 0) {
+    const hints = [...session.hints]
+    session.hints.clear()
+    await update($, work, (kept) => hints.reduce((left, [id, at]) => begun(left, id, at - HINT_MS), kept))
+  }
 
-  if (isBusy && (await isPaneUp($))) {
+  const jobs = await read($, work)
+  const isBusy = jobs.running.length > 0 || (await read($, runs)).some(isLive)
+  const isUp = await isPaneUp($)
+
+  // The clock moves the open pane's times, and the transcript's rows of a
+  // shell that runs, which show while the pane is closed.
+  if ((isBusy && isUp) || (session.hasRows && jobs.running.some((job) => job.kind === 'shell'))) {
     const at = await $.clock.now()
     await update($, now, () => at)
   }
 
+  // What the docked pane takes from the screen: the label and the transcript's
+  // rows fit what is left.
+  const cells = isUp ? session.dockCells : 0
+
+  if (cells !== (await read($, docked))) {
+    await update($, docked, () => cells)
+  }
+
   // Last, so a slow answer of GitHub holds nothing above: what is watched is
-  // polled, one poll at a time.
-  if (session.hasChecks && !session.isPolling && (await read($, watches)).length > 0) {
+  // polled, one poll at a time, and nothing while the deck is closed.
+  if (
+    session.hasChecks &&
+    !session.isPolling &&
+    (await read($, watches)).length > 0 &&
+    !(await isClosed($))
+  ) {
     const at = await $.clock.now()
 
     if (at - session.polledAt >= (session.isAnon ? POLL_ANON_MS : POLL_MS)) {
@@ -664,6 +767,8 @@ export const register: Register = (on, options) => {
     ticks: 0,
     minted: 0,
     lengths: new Map(),
+    hints: new Map(),
+    dockCells: 0,
     hasTool: options.modelTool === true,
     hasToasts: options.toasts !== false,
     hasRows: options.transcriptRows !== false,
@@ -752,11 +857,13 @@ export const register: Register = (on, options) => {
 
       const answer = await watching($, session, rest[0] ?? '', false)
 
-      if (!answer.isRefused) {
-        await $.ui.open(PANE_OPEN)
+      if (answer.isRefused) {
+        return { text: answer.text }
       }
 
-      return { text: answer.text }
+      const opened = await paneOpened($)
+
+      return { text: opened === PANE_OPENED ? answer.text : `${answer.text} ${opened}` }
     }
 
     if (rest.length > 0) {
@@ -802,18 +909,12 @@ export const register: Register = (on, options) => {
 
     if (await isClosed($)) {
       await closedAs($, false)
-      await $.ui.open(PANE_OPEN)
+      const opened = await paneOpened($)
 
-      return { text: 'Deck is back, and its pane is open.' }
+      return { text: opened === PANE_OPENED ? 'Deck is back, and its pane is open.' : `Deck is back. ${opened}` }
     }
 
-    if (first === 'open') {
-      await $.ui.open(PANE_OPEN)
-
-      return { text: 'Deck pane opened.' }
-    }
-
-    return { text: (await toggled($)) ? 'Deck pane opened.' : 'Deck pane closed.' }
+    return { text: first === 'open' ? await paneOpened($) : await toggled($) }
   })
 
   // A shell command, from its start to its end. Of the call it reads what it
@@ -841,6 +942,7 @@ export const register: Register = (on, options) => {
         model: '',
         effort: '',
         owner: e.agentId ?? '',
+        isAsking: false,
       }),
     )
 
@@ -851,13 +953,17 @@ export const register: Register = (on, options) => {
       throw failure
     })
     const at = await $.clock.now()
+    // The clock starts once the person let it run, where they were asked.
+    const job = (await read($, work)).running.find((one) => one.id === id)
+    const from = job === undefined ? startedAt : job.isAsking ? at : job.startedAt
+
     if (answer.deny !== undefined) {
       await update($, work, (kept) => dropped(kept, id))
     } else if (answer.isError === true) {
       await update($, work, (kept) => ended(kept, id, 'failed', at))
     } else if (answer.result.backgroundTaskId !== undefined) {
       const taskId = answer.result.backgroundTaskId
-      await update($, work, (kept) => backgrounded(kept, id, taskId))
+      await update($, work, (kept) => backgrounded(kept, id, taskId, at))
     } else {
       const status = answer.result.interrupted ? 'killed' : 'done'
       await update($, work, (kept) => ended(kept, id, status, at))
@@ -865,11 +971,43 @@ export const register: Register = (on, options) => {
 
     if (session.hasRows) {
       await update($, spans, (kept) =>
-        Object.fromEntries([...Object.entries(kept), [id, at - startedAt]].slice(-SPANS_KEPT)),
+        Object.fromEntries([...Object.entries(kept), [id, at - from]].slice(-SPANS_KEPT)),
       )
     }
 
     return answer
+  })
+
+  // Claude Code asks the person whether a shell may run. The dialog names no
+  // call, so the shell is found by its command's first line, the one its row
+  // keeps, among those its loop runs; nothing else of the dialog is read.
+  // The row waits with no clock until the shell runs.
+  on('classic.PermissionRequest', async ($, e, next) => {
+    if (e.tool_name === 'Bash' && !(await isClosed($))) {
+      const input = isRecord(e.tool_input) ? e.tool_input : {}
+      const line = shellDetail(toText(input.command))
+      const owner = e.agent_id ?? ''
+      const job = (await read($, work)).running.findLast(
+        (one) => one.kind === 'shell' && !one.isAsking && one.taskId === '' && one.owner === owner && one.detail === line,
+      )
+
+      if (job !== undefined) {
+        await update($, work, (kept) => askedAbout(kept, job.id))
+      }
+    }
+
+    return next(e)
+  })
+
+  // Claude Code draws its ctrl+b hint under a shell once it has run two
+  // seconds: a shell the person was asked about runs since then. Only the
+  // call's id is read, while the row is drawn, and taken up by the next tick.
+  on('ui.render', { component: 'ToolProgress' }, async ($, e, next) => {
+    if (e.props.kind === 'background_hint' && !session.hints.has(e.props.tool_use_id)) {
+      session.hints.set(e.props.tool_use_id, await $.clock.now())
+    }
+
+    return next(e)
   })
 
   // A background task stopped by Claude or the person: only the id of the
@@ -948,6 +1086,7 @@ export const register: Register = (on, options) => {
       }
 
       const at = await $.clock.now()
+      await foldsPruned($)
       const made = runOf(
         freeId(await read($, runs), at),
         toText(e.title),
@@ -980,7 +1119,7 @@ export const register: Register = (on, options) => {
       }
 
       if (run === undefined) {
-        return { deny: 'No plan is open. Call plan first.' }
+        return { deny: 'No plan of yours is open. Call plan first, or name its run.' }
       }
 
       const id = toText(e.id).trim()
@@ -1065,6 +1204,7 @@ export const register: Register = (on, options) => {
           model: answer.model ?? '',
           effort: '',
           owner: e.parentAgentId ?? '',
+          isAsking: false,
         }),
       )
     }
@@ -1164,6 +1304,9 @@ export const register: Register = (on, options) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     await read($, now)
     const at = await $.clock.now()
+    // What the docked pane takes from the screen, which the next tick hands on.
+    session.dockCells =
+      e.surface === 'terminal' && e.props.placement === 'dock' ? e.props.bodyColumns + DOCK_FRAME_CELLS : 0
     const all = await read($, runs)
     const shut = await read($, folds)
     const active = activeOf(all)
@@ -1177,6 +1320,7 @@ export const register: Register = (on, options) => {
       work: jobs,
       now: at,
       columns: e.props.bodyColumns,
+      isInline: e.props.placement === 'inline',
       onEffort: () => {
         void update($, meter, stepped)
       },
@@ -1238,14 +1382,15 @@ export const register: Register = (on, options) => {
         return {
           id,
           status,
+          isAsking: job?.isAsking === true,
           title: job?.title ?? shellTitle(toText(input.description), toText(input.command)),
-          span: ms >= 1000 ? spanText(ms) : '',
+          span: ms >= 1000 && job?.isAsking !== true ? spanText(ms) : '',
         }
       })
+      // The conversation's width: the screen's, less what the docked pane takes.
+      const columns = (e.viewport?.columns ?? Number.POSITIVE_INFINITY) - (await read($, docked))
 
-      return groupTree($.ui.resolve(e), await next(e), rows, (row) => {
-        void shown($, row.id)
-      })
+      return groupTree($.ui.resolve(e), await next(e), rows, (row) => shown($, row.id), columns)
     })
   }
 
@@ -1276,28 +1421,32 @@ export const register: Register = (on, options) => {
     }
 
     const gauge = await read($, meter)
+    const jobs = await read($, work)
+    const tree = await next(e)
+    // The row fits what the screen leaves it: less the docked pane, and less
+    // the row of another mod's it joins.
+    const room = (e.viewport?.columns ?? Number.POSITIVE_INFINITY) - (await read($, docked)) - besideCells(tree)
+    const view: LabelView = {
+      head: modelName(gauge.model),
+      bar: effortText(gauge).split(' ')[0] ?? '',
+      level: effortOf(gauge),
+      effortColor: effortColor(gauge),
+      canStep: canStep(gauge),
+      onEffort: () => {
+        void update($, meter, stepped)
+      },
+      // A shell Claude Code asks the person about is not counted as running.
+      running: jobs.running.filter((job) => !job.isAsking).length,
+      runTitle: active?.title ?? '',
+      runCount: active === undefined ? '' : runCount(active),
+      runCells: RUN_TITLE_CELLS,
+      isFailed: active !== undefined && statusOfSteps(leavesOf(active)) === 'failed',
+      onPress: () => pressed($, toggled($)),
+      onClose: () => {
+        void rowClosedAs($, true)
+      },
+    }
 
-    return beside(
-      await next(e),
-      labelRow($.ui.resolve(e), {
-        head: modelName(gauge.model),
-        bar: effortText(gauge).split(' ')[0] ?? '',
-        level: effortOf(gauge),
-        effortColor: effortColor(gauge),
-        canStep: canStep(gauge),
-        onEffort: () => {
-          void update($, meter, stepped)
-        },
-        running: (await read($, work)).running.length,
-        run: active === undefined ? '' : runText(active),
-        isFailed: active !== undefined && statusOfSteps(leavesOf(active)) === 'failed',
-        onPress: () => {
-          void toggled($)
-        },
-        onClose: () => {
-          void rowClosedAs($, true)
-        },
-      }),
-    )
+    return beside(tree, labelRow($.ui.resolve(e), fittedLabel(view, room)))
   })
 }

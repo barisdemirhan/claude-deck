@@ -57,6 +57,7 @@ test('the label names the model, its effort and what runs', async () => {
     model: '',
     effort: '',
     owner: '',
+    isAsking: false,
   } as const
 
   expect(labelText(NO_METER, NO_WORK)).toBe('✻ deck')

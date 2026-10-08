@@ -1,6 +1,6 @@
 {
   "name": "deck",
-  "version": "0.8.3",
+  "version": "0.8.4",
   "description": "A pane beside the conversation for the work behind it: running shells and agents, the model and a clickable effort meter, and step-by-step progress of any job as a tree: /deck",
   "author": {
     "name": "Barış Demirhan",

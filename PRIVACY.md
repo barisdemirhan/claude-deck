@@ -1,6 +1,6 @@
 # Privacy
 
-What the Deck mod for Claude Code does with data. Last changed on 6 October 2026.
+What the Deck mod for Claude Code does with data. Last changed on 9 October 2026.
 
 ## Out of the box
 
@@ -16,13 +16,15 @@ It reads more of Claude's work than a mod usually does, to name the rows of its 
 - Of each model request, the model, the effort, and whether a subagent made it.
 - Of the row Claude Code draws when a background task ends, the task's id, how it ended and how long it ran. Not the row's text.
 - When Claude stops, the ids of the background tasks still running.
+- When Claude Code asks you whether a shell may run, the tool's name and the first line of its command, to find that shell's row. Nothing else of the dialog, and not your answer.
+- When Claude Code draws its ctrl+b hint under a shell, the call's id, which says the shell runs.
 - From Claude Code, the main thread's model, how full the context window is, what the session cost, and how full its rate limits are.
 
 It reads nothing of a prompt's text, of any other tool's call, or of an answer.
 
-What it reads stays in the session's memory: the titles and times of the shells and agents that run and of the last eight that ended, the last six runs with their steps' titles and times, what you folded, the model, and the effort you set. Out of the box none of it is written to disk, and it is gone when the session ends; what is over leaves the pane after half an hour. While the deck is closed with `/deck close`, it reads none of it.
+What it reads stays in the session's memory: the titles and times of the shells and agents that run and of the last eight that ended, the last six runs with their steps' titles and times, what you folded, the model, and the effort you set. Out of the box none of it is written to disk, and it is gone when the session ends; what is over leaves the pane after half an hour. While the deck is closed with `/deck close`, it reads none of it, and what was running when it closed ends there.
 
-In the plugin's own Claude Code store, on your disk, it keeps two values: whether you closed the deck with `/deck close`, and whether you closed the label's row.
+In the plugin's own Claude Code store, on your disk, it keeps two values: whether you closed the deck with `/deck close`, and whether you closed the label's row. Each is there only while it is on. Every open session lists the store every two seconds, to follow a close made in another one.
 
 ## What it changes
 
@@ -51,7 +53,7 @@ Each of these is off until you turn it on in the plugin's settings:
 
   What it sends, and only while something is watched: questions to GitHub's API, read only, every 30 seconds, each naming the repository and the pull request, workflow run, branch or commit. Where the `gh` command is installed and signed in, the mod runs `gh api` and `gh` makes the request with its own sign-in, to the host of your remote or of the address you gave; the mod sees no token. Where it is not, the mod requests `https://api.github.com` itself, and no other host; if `GH_TOKEN` or `GITHUB_TOKEN` is set it reads that token and sends it as the request's authorization, to that host alone, and keeps it nowhere. GitHub is run by GitHub, Inc.; its [privacy statement](https://docs.github.com/site-policy/privacy-policies/github-general-privacy-statement) covers what it keeps of a request. Nothing goes to the author of this mod.
 
-  What stops it: `/deck unwatch`, `/deck close`, the checks' end, the session's end, or the setting turned off. A watch also ends by itself when no check moves for half an hour, and after two hours in all.
+  What stops it: `/deck unwatch`, `/deck close` in any session, the checks' end, the session's end, or the setting turned off. A watch also ends by itself when no check moves for half an hour while none runs, and after two hours in all.
 
   What it adds to Claude's work: one fixed note saying the `watch` tool is there, placed as the note of Tool for Claude is, with its words in the README; and for a watch Claude asked to be woken for, one prompt the mod submits when the checks are over.
 
