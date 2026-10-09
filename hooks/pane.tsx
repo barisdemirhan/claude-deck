@@ -22,6 +22,8 @@ import {
   effortText,
   isHeld,
   isTight,
+  levelBar,
+  levelColor,
   modelName,
   usageText,
 } from './meter'
@@ -96,13 +98,18 @@ const detailOf = (job: Job, cells: number): string =>
         .join(' · ') || 'agent'
 
 /**
- * `▸ ⏵ Typecheck, test and lint        shell    1m 12s`
- *
- * The mark and title are buttons: a press opens the detail under it, where a
- * job that runs in the background has a stop button. Under a running agent's
- * row come the shells and agents it started and the run it opened. Where the
- * section's name says the kind, the kind's column is left out.
+ * An agent's model and effort at the end of its row, `Sonnet ▰▰▰▱▱`: the
+ * model's first word, then its effort's bar in the level's color. The bar is
+ * left out where the pane is too narrow for one, and both where it is too
+ * narrow for a kind. The opened row has the full name and the level.
  */
+const tuneOf = (job: Job, columns: number): { name: string; bar: string; cells: number } => {
+  const name = job.kind === 'agent' && columns >= KIND_FROM ? (modelName(job.model).split(' ')[0] ?? '') : ''
+  const bar = name !== '' && columns >= BAR_FROM ? levelBar(job.effort) : ''
+
+  return { name, bar, cells: name === '' ? 0 : 1 + name.length + (bar === '' ? 0 : 1 + bar.length) }
+}
+
 /** A title cut to the cells it has, so a row stays one line: a button's label does not cut itself. */
 const fitted = (title: string, cells: number): string => {
   const letters = [...title]
@@ -110,6 +117,15 @@ const fitted = (title: string, cells: number): string => {
   return letters.length > cells ? `${letters.slice(0, Math.max(0, cells - 1)).join('')}…` : title
 }
 
+/**
+ * `▸ ⏵ Typecheck, test and lint        shell    1m 12s`
+ *
+ * The mark and title are buttons: a press opens the detail under it, where a
+ * job that runs in the background has a stop button. Under a running agent's
+ * row come the shells and agents it started and the run it opened. Where the
+ * section's name says the kind, the kind's column is left out; an agent's
+ * model and effort take its place in every section.
+ */
 const jobRow = (
   kit: Kit,
   job: Job,
@@ -118,10 +134,12 @@ const jobRow = (
   wantsKind = true,
 ): RenderElement => {
   const { Box, Text, Button } = kit
-  const hasKind = wantsKind && view.columns >= KIND_FROM
+  const tune = tuneOf(job, view.columns)
+  // An agent's model stands in for its kind, which it says as well.
+  const hasKind = tune.cells === 0 && wantsKind && view.columns >= KIND_FROM
   // The row's cells less its fold and state marks, its indent and its columns at the right.
   const room =
-    view.columns - 2 * PAD - 4 - 2 * indent - SPAN_CELLS - (hasKind ? KIND_CELLS : 0) - 1
+    view.columns - 2 * PAD - 4 - 2 * indent - SPAN_CELLS - (hasKind ? KIND_CELLS : tune.cells) - 1
   const title = fitted(job.title, room)
   // What the agent of this row started and still runs is drawn under it.
   const own =
@@ -164,6 +182,17 @@ const jobRow = (
         {hasKind && (
           <Box width={KIND_CELLS} flexShrink={0} justifyContent="flex-end">
             <Text dimColor>{job.kind}</Text>
+          </Box>
+        )}
+        {tune.cells > 0 && (
+          <Box width={tune.cells} flexShrink={0} justifyContent="flex-end">
+            <Text dimColor>{tune.name}</Text>
+            {tune.bar !== '' && <Text> </Text>}
+            {tune.bar !== '' && (
+              <Text color={levelColor(job.effort)} dimColor={job.status !== 'running' || levelColor(job.effort) === undefined}>
+                {tune.bar}
+              </Text>
+            )}
           </Box>
         )}
         <Box width={SPAN_CELLS} flexShrink={0} justifyContent="flex-end">

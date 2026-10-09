@@ -58,6 +58,14 @@ export const modelName = (id: string): string => {
   return name.filter((part) => part !== '').join(' ')
 }
 
+/** A level's color, cooler to warmer as it rises. */
+export const levelColor = (level: string): string | undefined =>
+  [undefined, 'success', 'warning', 'claude', 'error'][LEVELS.indexOf(level)]
+
+/** A level's bar, `▰▰▰▱▱`; empty for a budget in tokens or no effort. */
+export const levelBar = (level: string): string =>
+  LEVELS.includes(level) ? barOf(LEVELS.indexOf(level) + 1, LEVELS.length) : ''
+
 /** The effort in force: the click's while one stands, else Claude Code's own. */
 export const effortOf = (meter: Meter): string => meter.wanted || meter.effort
 
@@ -76,15 +84,14 @@ export const effortText = (meter: Meter): string => {
     return ''
   }
 
-  return level < 0 ? `effort ${effort}` : `${barOf(level + 1, LEVELS.length)} ${effort}`
+  return level < 0 ? `effort ${effort}` : `${levelBar(effort)} ${effort}`
 }
 
 /**
  * The effort's color, cooler to warmer as the level rises: low is dim, then
  * green, yellow, orange and red for max. A budget in tokens has none.
  */
-export const effortColor = (meter: Meter): string | undefined =>
-  [undefined, 'success', 'warning', 'claude', 'error'][LEVELS.indexOf(effortOf(meter))]
+export const effortColor = (meter: Meter): string | undefined => levelColor(effortOf(meter))
 
 /** `ctx ▰▰▱▱▱▱▱▱ 23%`; empty before the window's fill is known. */
 export const contextText = (meter: Meter): string =>

@@ -115,7 +115,7 @@ A pass over what a day of additions had left, taking out what earned no place:
 - **One run a loop**: a plan takes the place of the task list its loop was following, so one job is not shown twice.
 - **`/clear` clears the deck's runs** with the conversation they belong to.
 - **What an agent starts sits under the agent's row**: its shells and agents, as its run did already.
-- **The kind column says `shell` or `agent`** and nothing else; an agent's model is in its opened row.
+- **The kind column says `shell` or `agent`** and nothing else; an agent's model is in its opened row. (0.8.5 puts the model and effort on the row: see there.)
 - The effort meter can still differ from what Claude Code's own display says: a mod can rewrite a request's effort, not Claude Code's setting. `⟳` marks that case.
 
 ## 0.7
@@ -159,6 +159,10 @@ A pass over what a narrow terminal and a long session showed, after a report tha
 - **The label and the transcript's rows fit the screen.** The label's row did not know its width, and a run's title could push its `×` past the edge. It now fits the screen's width less the docked pane (its body as last drawn, its frame and a cell) and less another mod's row it joins, measured from that row's text: the run's title is cut first, then the model's name goes, then the run. A transcript row's title is cut to the same width, at most 56 cells. Both are a measure of what the drawing holds, not of the terminal's paint, which the tests do not see.
 - **Above the prompt the pane is shorter**: the cost and the limits share the first row while it has room, and `RECENT` lists the newest three and counts the rest.
 - **The store is listed, not read**, every two seconds: a switch is kept only while it is on, so one listing tells a session that nothing changed, where two reads did. A switch an older version left `false` is taken away on the way.
+
+## 0.8.5
+
+**An agent's row says its model and effort.** In the pane a subagent's row ended with its time alone, and which model and effort it ran with took a press to see. Now the row's end has the model's first word and its effort's bar in the level's color, `Opus ▰▰▰▱▱`, where `RECENT` would say `agent`; the kind is plain from it. Both come from what the deck already read: the model from the agent's start, the effort from its requests. Below 44 columns the bar goes, below 36 the name, as a run's bar and a row's kind do, so the title keeps its room. The opened row still has the full name and the level's word.
 
 ## Checked
 

@@ -963,9 +963,19 @@ test(
     // The agent's own shell is no row of the shells' section.
     expect(texts.some((text) => text.startsWith('SHELLS'))).toBe(false)
     expect(texts).toContain('Search')
+    // The agent's row says its model and its effort's bar, as its request carried them.
+    expect(texts).toContain('Fable')
+    expect(texts).toContain('▰▰▰▱▱')
     await pane.press({ key: 'job:agent-1' })
     expect(await pane.find({ type: 'Text', text: 'Fable 5.1 · high effort' })).toBeDefined()
     await pane.unmount()
+
+    const narrow = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 40 } })
+    const few = (await narrow.findAll({ type: 'Text' })).map((text) => text.text)
+    // Too narrow for a bar, the model's name is kept.
+    expect(few).toContain('Fable')
+    expect(few).not.toContain('▰▰▰▱▱')
+    await narrow.unmount()
   },
 )
 
