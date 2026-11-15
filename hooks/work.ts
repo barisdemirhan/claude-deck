@@ -1,4 +1,4 @@
-// The shells and agents the deck lists: what runs, and what lately ended.
+// The shells, agents and MCP tasks the deck lists: what runs, and what lately ended.
 // Plain functions over plain values; the hooks module calls them with what
 // the events said.
 
@@ -12,6 +12,9 @@ const KEPT = 8
 const WORTH_MS = 3000
 const TITLE_CHARS = 80
 const DETAIL_CHARS = 200
+/** How an MCP tool call's answer names the background task it became, and the tool. */
+const MCP_TASK = /\bmoved to the background as task ([\w-]+)/
+const MCP_NAME = /^MCP tool "([^"\n]+)"/
 
 const STATUSES: Readonly<Record<string, JobStatus>> = {
   completed: 'done',
@@ -35,6 +38,34 @@ export const shellDetail = (command: string): string => lineOf(command, DETAIL_C
 /** A shell's row: what the call said it does, or the command where it said nothing. */
 export const shellTitle = (description: string | undefined, command: string): string =>
   lineOf(description ?? '') || lineOf(command) || 'shell'
+
+/**
+ * The background task an MCP tool call became, as the call's answer words it
+ * (`MCP tool "plugin:shop:ci/build" started server-side task … It was moved
+ * to the background as task k95qyf3nz …`): the task's id and the tool's full
+ * name. Undefined for a call that answered in place. Claude Code gives the id
+ * in this text alone.
+ */
+export const mcpTaskOf = (text: string): { taskId: string; name: string } | undefined => {
+  const taskId = MCP_TASK.exec(text)?.[1]
+
+  return taskId === undefined ? undefined : { taskId, name: MCP_NAME.exec(text)?.[1] ?? '' }
+}
+
+/** The server of an MCP tool's full name, `plugin:shop:ci` of `plugin:shop:ci/build`. */
+export const serverOf = (name: string): string => name.slice(0, Math.max(0, name.lastIndexOf('/')))
+
+/** An MCP task's row: its server's own name and the tool, `ci/build`, a plugin's prefix left out. */
+export const mcpTitle = (name: string): string => {
+  const server = serverOf(name)
+  const tool = name.slice(name.lastIndexOf('/') + 1)
+  const short = server.slice(server.lastIndexOf(':') + 1)
+
+  return lineOf(short === '' ? tool : `${short}/${tool}`) || 'mcp'
+}
+
+/** An MCP task's full name as its opened row shows it. */
+export const mcpDetail = (name: string): string => lineOf(name, DETAIL_CHARS)
 
 /** An agent's row, as Claude Code names a subagent: `type(task)`. */
 export const agentTitle = (type: string, description: string): string => {
@@ -80,9 +111,10 @@ const isWorthKeeping = (job: Job): boolean =>
   job.endedAt - job.startedAt >= WORTH_MS
 
 const closed = (work: Work, job: Job, status: JobStatus, at: number): Work => {
-  // One that ended while the person was still asked ran under the two seconds
-  // that show it began, or never ran: the wait is not its time.
-  const from = job.isAsking ? Math.max(at, job.startedAt) : job.startedAt
+  // A shell that ended while the person was still asked ran under the two
+  // seconds that show it began, or never ran: the wait is not its time. An MCP
+  // task that waited on an answer ran all along.
+  const from = job.isAsking && job.kind === 'shell' ? Math.max(at, job.startedAt) : job.startedAt
   const ended = { ...job, status, startedAt: from, endedAt: Math.max(at, from), isAsking: false }
   const running = work.running.filter((one) => one.id !== job.id)
 
@@ -129,12 +161,12 @@ export const reported = (work: Work, notice: Notice, at: number): Work => {
 }
 
 /**
- * Closes the background shells Claude Code no longer lists as in flight:
- * they ended with no notification this session saw.
+ * Closes the background shells and MCP tasks Claude Code no longer lists as
+ * in flight: they ended with no notification this session saw.
  */
 export const settled = (work: Work, alive: readonly string[], at: number): Work =>
   work.running
-    .filter((job) => job.kind === 'shell' && job.taskId !== '' && !alive.includes(job.taskId))
+    .filter((job) => job.kind !== 'agent' && job.taskId !== '' && !alive.includes(job.taskId))
     .reduce((left, job) => closed(left, job, 'ended', at), work)
 
 /**
@@ -143,6 +175,62 @@ export const settled = (work: Work, alive: readonly string[], at: number): Work 
  */
 export const endedAll = (work: Work, at: number): Work =>
   work.running.reduce((left, job) => closed(left, job, 'ended', at), work)
+
+const isTaskOf = (job: Job, server: string): boolean =>
+  job.kind === 'mcp' && serverOf(job.detail) === server
+
+/** True where an MCP task of this server runs. */
+export const hasTaskOf = (work: Work, server: string): boolean =>
+  work.running.some((job) => isTaskOf(job, server))
+
+/**
+ * An MCP server asks the person a question. Its question names no task, so
+ * the newest of its tasks that runs, and waits on nothing yet, waits on it.
+ */
+export const questioned = (work: Work, server: string): Work => {
+  const job = work.running.findLast((one) => isTaskOf(one, server) && !one.isAsking)
+
+  return job === undefined ? work : asked(work, job.id)
+}
+
+/** The person answered an MCP server's question: its tasks that waited run on. */
+export const answered = (work: Work, server: string): Work => ({
+  ...work,
+  running: work.running.map((job) => (isTaskOf(job, server) && job.isAsking ? { ...job, isAsking: false } : job)),
+})
+
+/** A background task as Claude Code lists it when Claude stops. */
+type Listed = { id: string; type: string; status: string; server?: string; tool?: string }
+
+/** An MCP task's row, from the tool's full name. */
+export const mcpJob = (id: string, taskId: string, name: string, at: number, isAsking = false): Job => ({
+  id,
+  kind: 'mcp',
+  title: mcpTitle(name),
+  startedAt: at,
+  endedAt: 0,
+  status: 'running',
+  taskId,
+  detail: mcpDetail(name),
+  model: '',
+  effort: '',
+  owner: '',
+  isAsking,
+})
+
+/**
+ * The MCP tasks Claude Code lists as running that the deck has no row of:
+ * their call's answer did not word the task as the deck reads it. Each gets a
+ * row from now, named by its server and tool.
+ */
+export const listed = (work: Work, tasks: readonly Listed[], at: number): Work => {
+  const known = new Set([...work.running, ...work.recent].map((job) => job.taskId))
+  const found = tasks
+    .filter((task) => task.type === 'MCP task' && task.status === 'running' && !known.has(task.id))
+    .map((task) => mcpJob(task.id, task.id, `${task.server ?? ''}/${task.tool ?? ''}`, at))
+
+  return found.length === 0 ? work : { ...work, running: [...work.running, ...found] }
+}
 
 /** An agent that ended is at work again (a message woke it): its row runs on. */
 export const revived = (work: Work, id: string): Work => {

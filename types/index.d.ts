@@ -1,17 +1,17 @@
 // What the mod keeps for the session, in memory: `$.state` holds each of
 // these, and none of it is written to disk.
 
-export type JobKind = 'shell' | 'agent'
+export type JobKind = 'shell' | 'agent' | 'mcp'
 
 /** `ended` is an end nobody reported: neither done nor failed is known. */
 export type JobStatus = 'running' | 'done' | 'failed' | 'killed' | 'ended'
 
-/** One shell command or one subagent, running or lately ended. */
+/** One shell command, one subagent or one MCP task, running or lately ended. */
 export type Job = {
-  /** The call's id for a shell, the agent's id for a subagent. */
+  /** The call's id for a shell and an MCP task, the agent's id for a subagent. */
   id: string
   kind: JobKind
-  /** A shell's description, or its command where it has none; an agent's type and task. */
+  /** A shell's description, or its command where it has none; an agent's type and task; an MCP task's server and tool. */
   title: string
   startedAt: number
   /** 0 while it runs. */
@@ -19,7 +19,7 @@ export type Job = {
   status: JobStatus
   /** The background task's id, as its notification names it; empty in the foreground. */
   taskId: string
-  /** A shell's command, its first line; shown when the row is opened. Empty for an agent. */
+  /** A shell's command, its first line, or an MCP task's tool by its full name; shown when the row is opened. Empty for an agent. */
   detail: string
   /** An agent's model, as its spawn answered it; empty for a shell. */
   model: string
@@ -29,7 +29,8 @@ export type Job = {
   owner: string
   /**
    * True while Claude Code asks the person whether a shell may run: its clock
-   * starts once it does.
+   * starts once it does. For an MCP task, while its server waits on the
+   * person's answer to a question.
    */
   isAsking: boolean
 }
@@ -89,6 +90,11 @@ export type Run = {
   touchedAt: number
   /** When the agent that opened it ended with steps left; 0 while it can still move. */
   stoppedAt: number
+  /**
+   * True while a run of the main thread's waits for a later turn: it stopped
+   * when its turn ended, and no half hour takes it. Left out by older code.
+   */
+  isWaiting?: boolean
 }
 
 /** One thing followed on GitHub, shown as a run: a commit's checks, or a workflow run's jobs. */

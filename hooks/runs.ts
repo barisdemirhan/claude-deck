@@ -59,6 +59,23 @@ export const isFinished = (leaves: readonly Step[]): boolean =>
 const doneOf = (leaves: readonly Step[]): number =>
   leaves.filter((leaf) => leaf.status === 'done').length
 
+/**
+ * How many cells of a run's bar are filled: each leaf done is one, each leaf
+ * that runs half of one while the run is not stopped. A running leaf fills
+ * one cell at least, and the bar is full only when every leaf is done.
+ */
+const filledOf = (run: Run, leaves: readonly Step[]): number => {
+  const done = doneOf(leaves)
+  const running = run.stoppedAt === 0 ? leaves.filter((leaf) => leaf.status === 'running').length : 0
+  const cells = Math.round(((done + running / 2) / Math.max(1, leaves.length)) * METER_CELLS)
+
+  if (leaves.length > 0 && done === leaves.length) {
+    return METER_CELLS
+  }
+
+  return Math.min(METER_CELLS - 1, running > 0 ? Math.max(1, cells) : cells)
+}
+
 /** From the first start among the leaves to the last end, or to now while one is not over. */
 const spanOf = (leaves: readonly Step[], now: number): string => {
   const starts = leaves.filter((leaf) => leaf.startedAt > 0).map((leaf) => leaf.startedAt)
@@ -200,7 +217,7 @@ export const stepped = (
     return isBefore ? turned(one, 'done', at) : one
   })
 
-  return { run: { ...run, steps, touchedAt: at, stoppedAt: 0 } }
+  return { run: { ...run, steps, touchedAt: at, stoppedAt: 0, isWaiting: false } }
 }
 
 /**
@@ -264,6 +281,8 @@ export const taskCreated = (
     ...list,
     steps: [...list.steps.filter((one) => one.id !== taskId), step],
     touchedAt: at,
+    stoppedAt: 0,
+    isWaiting: false,
   })
 }
 
@@ -288,7 +307,7 @@ export const taskUpdated = (
 
     return steps.length === 0
       ? runs.filter((run) => run.id !== list.id)
-      : replaced(runs, { ...list, steps, touchedAt: at })
+      : replaced(runs, { ...list, steps, touchedAt: at, stoppedAt: 0, isWaiting: false })
   }
 
   const steps = list.steps.map((step) => {
@@ -311,7 +330,7 @@ export const taskUpdated = (
       : named
   })
 
-  return replaced(runs, { ...list, steps, touchedAt: at })
+  return replaced(runs, { ...list, steps, touchedAt: at, stoppedAt: 0, isWaiting: false })
 }
 
 /** True while a run can still move: steps are left, and its agent has not ended. */
@@ -337,10 +356,27 @@ const halted = (run: Run, at: number, isAnswered = false): Run => {
       ? { ...step, status: isAnswered ? ('done' as const) : ('pending' as const), endedAt: at }
       : step,
   )
-  const left = { ...run, steps, touchedAt: at }
+  const left = { ...run, steps, touchedAt: at, isWaiting: false }
 
   return isFinished(leavesOf(left)) ? left : { ...left, stoppedAt: at }
 }
+
+/** True for a run of the main thread's own: its plan or its task list. */
+const isMains = (run: Run): boolean => run.loop === '' && run.feed !== 'checks'
+
+/**
+ * The main thread's turn ended at `endedAt` and nothing it started runs on:
+ * each run of its own that no step has moved since waits from `at`. Its
+ * steps keep their states, so a step called in a later turn moves it on from
+ * where it stood, however long the person was away; its clock holds
+ * meanwhile, and a clear takes it.
+ */
+export const rested = (runs: readonly Run[], endedAt: number, at: number): Run[] =>
+  runs.map((run) => (isMains(run) && isLive(run) && run.touchedAt <= endedAt ? { ...run, stoppedAt: at, isWaiting: true } : run))
+
+/** True where `rested` would change a run. */
+export const canRest = (runs: readonly Run[], endedAt: number): boolean =>
+  runs.some((run) => isMains(run) && isLive(run) && run.touchedAt <= endedAt)
 
 /**
  * Every run still under way stops where it stands: the deck was closed and
@@ -367,9 +403,18 @@ export const keptFolds = (
     ),
   )
 
-/** The runs that can still move: what a clear leaves, or those touched since a time. */
+/**
+ * The runs that can still move: what a clear leaves, or those touched since
+ * a time. A run that waits for a later turn is over for a clear and not for
+ * the time: the person may answer hours on, and its agent goes on from it.
+ */
 export const swept = (runs: readonly Run[], before = Number.POSITIVE_INFINITY): Run[] =>
-  runs.filter((run) => isLive(run) || Math.max(run.touchedAt, run.stoppedAt) >= before)
+  runs.filter(
+    (run) =>
+      isLive(run) ||
+      (run.isWaiting === true && before !== Number.POSITIVE_INFINITY) ||
+      Math.max(run.touchedAt, run.stoppedAt) >= before,
+  )
 
 /**
  * What to tell the person of a change of the runs: a run that finished, or a
@@ -428,7 +473,10 @@ export type Row = {
   count: string
   span: string
   isOpen: boolean
-  /** On a run's row: its agent ended with steps left. */
+  /**
+   * On a run's row: it stopped with steps left (its agent ended, or the main
+   * thread's turn did). On a branch's or a leaf's: it was under way then.
+   */
   isStopped: boolean
 }
 
@@ -455,7 +503,7 @@ export const rowsOf = (
     depth: 0,
     status: statusOf(all),
     title: run.owner === '' ? run.title : `${run.title} · ${run.owner}`,
-    meter: barOf((doneOf(all) / Math.max(1, all.length)) * METER_CELLS, METER_CELLS),
+    meter: barOf(filledOf(run, all), METER_CELLS),
     count: `${doneOf(all)}/${all.length}`,
     span: spanOf(all, at),
     isOpen: isRunOpen,
@@ -491,7 +539,7 @@ export const rowsOf = (
           count: '',
           span: spanOf([step], at),
           isOpen: false,
-          isStopped: false,
+          isStopped: run.stoppedAt > 0 && step.status === 'running',
         },
       ]
     }
@@ -511,12 +559,35 @@ export const rowsOf = (
         count: `${doneOf(leaves)}/${leaves.length}`,
         span: spanOf(leaves, at),
         isOpen,
-        isStopped: false,
+        isStopped: run.stoppedAt > 0 && status === 'running',
       },
     ]
   })
 
   return [top, ...rows]
+}
+
+/**
+ * What a step's answer says after its count: the step to start next, or
+ * that the one started is the last. A subagent's last step ends with its
+ * answer; the main thread's is its own to end, since its turn may end on a
+ * question with the step half made.
+ */
+export const hintOf = (run: Run, id: string, word: StepWord): string => {
+  const leaves = leavesOf(run)
+  const next = leaves[leaves.findIndex((leaf) => leaf.id === id) + 1]
+
+  if (next !== undefined) {
+    return word === 'fail' ? '' : ` Next: ${next.id}.`
+  }
+
+  if (word !== 'start') {
+    return ''
+  }
+
+  return run.loop === ''
+    ? ' It is the last step: call done when it is finished.'
+    : ' It is the last step: it is done by itself when you answer.'
 }
 
 /** The plan as the tool answers it: each step's id and title, a line each. */

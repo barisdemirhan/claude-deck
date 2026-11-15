@@ -12,7 +12,7 @@ import type { ToolSpec } from 'claude-code'
  * end of each subagent's task.
  */
 export const NOTE =
-  'The person follows progress in a pane called Deck, which shows them the title and steps of a plan and the description of each shell command you run. They read these to understand what is happening: write them in the language the person writes in. If you have the tool mcp__deck__plan and this job will take more than a couple of minutes or more than three stages, call it once as you begin with three to six steps (load it and mcp__deck__step with ToolSearch if their schemas are not loaded); its first step starts by itself, so call mcp__deck__step only as you move to the next one. Skip it for a short job: each call costs the person a round trip.'
+  'The person follows progress in a pane called Deck, which shows them the title and steps of a plan and the description of each shell command you run. They read these to understand what is happening: write them in the language the person writes in. If you have the tool mcp__deck__plan and this job will take more than a couple of minutes or more than three stages, call it once as you begin with three to six steps (load it and mcp__deck__step with ToolSearch if their schemas are not loaded); its first step starts by itself, so call mcp__deck__step only as you move to the next one, and to mark the last step done when the job is finished. Skip it for a short job: each call costs the person a round trip.'
 
 /** The note's id among the system prompt's sections. */
 export const NOTE_SECTION = 'deck:plan'
@@ -39,7 +39,7 @@ export const TOOLS: readonly ToolSpec[] = [
   {
     name: 'step',
     description:
-      'Updates one leaf step of the plan. start also ends any step still running before it in the plan, so moving on needs only start. The last step of a subagent is done by itself when it answers; the main thread marks its last step done. Parents follow their steps; times are kept for you.',
+      'Updates one leaf step of the plan. start also ends any step still running before it in the plan, so moving on needs only start. The last step of a subagent is done by itself when it answers; the main thread marks its last step done when the job is finished. fail says a step went wrong. Parents follow their steps; times are kept for you.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -40,6 +40,8 @@ import type { CallRow, LabelView } from './pane'
 import {
   RUN_TITLE_CELLS,
   activeOf,
+  canRest,
+  hintOf,
   isLive,
   keptFolds,
   newsOf,
@@ -52,6 +54,7 @@ import {
   planText,
   planned,
   replanned,
+  rested,
   rowsOf,
   runCount,
   runOf,
@@ -67,6 +70,7 @@ import { GLYPHS, jobSpan, labelText, spanText } from './view'
 import {
   NO_WORK,
   agentTitle,
+  answered,
   asked as askedAbout,
   backgrounded,
   begun,
@@ -74,8 +78,14 @@ import {
   dropped,
   ended,
   endedAll,
+  hasTaskOf,
+  listed,
+  mcpJob,
+  mcpTaskOf,
+  questioned,
   reported,
   revived,
+  serverOf,
   settled,
   shellDetail,
   shellTitle,
@@ -89,16 +99,18 @@ const PANE = 'deck'
 // The size asked for: beside the conversation 52 cells across, above the
 // prompt 14 rows. A size the person dragged it to stands over both.
 const PANE_OPEN = { id: PANE, title: 'Deck', columns: 52, rows: 14 } as const
-/** The store's one key: `/deck close` for every session. */
+/** The store's one key: `/deck off` for every session. */
 const CLOSED = 'closed'
 /** The store's other key: the label's row closed with its `×`, for every session. */
 const ROW_CLOSED = 'row-closed'
 const TICK_MS = 1000
-/** The store is read for another session's `/deck close` every this many ticks. */
+/** The store is read for another session's `/deck off` every this many ticks. */
 const FOLLOW_TICKS = 2
-const CLOSE_WORDS = ['close', 'exit', 'quit']
+const CLOSE_WORDS = ['off', 'close', 'exit', 'quit']
 const USAGE =
-  'Usage: /deck (opens or closes the pane) · /deck open · /deck clear (takes what is over out of the pane) · /deck row (the label as a row, or as text) · /deck watch [a pull request, a workflow run, a branch or a commit] (follows its GitHub checks) · /deck unwatch · /deck close (takes the deck away in every session)'
+  'Usage: /deck (opens or closes the pane) · /deck open · /deck clear (takes what is over out of the pane) · /deck clear all (takes the runs under way too) · /deck row (the label as a row, or as text) · /deck watch [a pull request, a workflow run, a branch or a commit] (follows its GitHub checks) · /deck unwatch · /deck off (takes the deck away in every session) · /deck help'
+/** What the label's `×` and `/deck row` say of the label as text. */
+const ROW_AS_TEXT = 'Deck keeps its label as text on the hint line. /deck row brings its row back.'
 const CHECKS_OFF =
   'GitHub checks are off. Turn on "GitHub checks" in /config, under the plugin\'s name, to follow them in the deck.'
 /** How long one question to GitHub may take. */
@@ -109,6 +121,12 @@ const ERROR_CHARS = 160
 /** What is over leaves the pane by itself after this long. */
 const STALE_MS = 30 * 60 * 1000
 const SWEEP_TICKS = 60
+/**
+ * A run of the main thread's waits once its turn has been over, with nothing
+ * it started still running, for this many ticks: a turn that a background
+ * job's end starts comes sooner than that.
+ */
+const REST_TICKS = 5
 /** A background job's end is told only when it ran this long, or failed. */
 const TOLD_MS = 30 * 1000
 const work = atom({ plugin: 'deck', key: 'work' } as const, NO_WORK)
@@ -133,6 +151,8 @@ const DOCK_FRAME_CELLS = 3
 const HINT_MS = 2000
 /** How many shell commands' lengths are kept for the transcript's rows. */
 const SPANS_KEPT = 60
+/** The start of the deck's own tools' names, which never become MCP tasks. */
+const DECK_TOOLS = 'mcp__deck__'
 
 type Label = 'button' | 'text' | 'off'
 
@@ -178,7 +198,7 @@ const shutDown = async ($: EngineInterface): Promise<void> => {
 }
 
 /**
- * Keeps `/deck close` or its undoing for every session and takes it up here
+ * Keeps `/deck off` or its undoing for every session and takes it up here
  * at once.
  */
 const closedAs = async ($: EngineInterface, isOff: boolean): Promise<void> => {
@@ -215,7 +235,7 @@ const switched = async ($: EngineInterface, key: string, isOn: boolean): Promise
   await (isOn ? $.store.set(key, true) : $.store.delete(key))
 }
 
-/** Takes up a `/deck close` another session made, or its undoing. */
+/** Takes up a `/deck off` another session made, or its undoing. */
 const followed = async ($: EngineInterface): Promise<void> => {
   const keys = await $.store.keys()
   const isOff = await isSet($, keys, CLOSED)
@@ -348,6 +368,19 @@ const sweptAway = async ($: EngineInterface, before?: number): Promise<void> => 
   await foldsPruned($)
 }
 
+/** A press on a run's `×`: that run leaves the pane, under way or not. */
+const droppedRun = async ($: EngineInterface, id: string): Promise<void> => {
+  await update($, runs, (kept) => kept.filter((run) => run.id !== id))
+  await foldsPruned($)
+}
+
+/** `/deck clear all`: every run and what is over leaves the pane; jobs that run stay. */
+const sweptAll = async ($: EngineInterface): Promise<void> => {
+  await sweptAway($)
+  await update($, runs, () => [])
+  await foldsPruned($)
+}
+
 /** The name a run a subagent opened carries: the agent's own, else its type. */
 const ownerOf = async ($: EngineInterface, agentId: string | undefined): Promise<string> => {
   if (agentId === undefined) {
@@ -386,8 +419,18 @@ type Session = {
   lengths: Map<string, { status: string; ms: number }>
   /** When Claude Code drew its ctrl+b hint under a shell, by its call's id: that shell runs. */
   hints: Map<string, number>
+  /** The MCP servers a main-thread call to waits on its answer, with how many calls. */
+  calls: Map<string, number>
+  /** Those of them that asked the person a question meanwhile. */
+  questions: Set<string>
   /** The cells the pane took from the screen as it was last drawn docked; 0 drawn inline. */
   dockCells: number
+  /** True while a turn of the main thread runs. */
+  isTurnOn: boolean
+  /** When the main thread's last turn ended; 0 before this module heard one end. */
+  turnEndedAt: number
+  /** How many ticks in a row found no turn and nothing running. */
+  restTicks: number
   hasTool: boolean
   hasToasts: boolean
   hasRows: boolean
@@ -646,6 +689,10 @@ const polledAll = async ($: EngineInterface, session: Session): Promise<void> =>
   }
 }
 
+/** True while a watch is to wake Claude: its turn is not the job's end. */
+const isWoken = async ($: EngineInterface): Promise<boolean> =>
+  (await read($, watches)).some((watch) => watch.wake)
+
 /**
  * A press on an opened row's stop button: asks Claude Code to stop that
  * background task, as its own TaskStop tool does, in the person's name.
@@ -662,11 +709,13 @@ const halted = async ($: EngineInterface, job: Job): Promise<void> => {
   if (answer !== undefined && answer.deny === undefined && answer.isError !== true) {
     const at = await $.clock.now()
     await update($, work, (kept) => reported(kept, { taskId: job.taskId, status: 'killed' }, at))
+  } else {
+    $.ui.toast(`Could not stop ${job.title}.`)
   }
 }
 
 /**
- * Once a second: every other time, another session's `/deck close`; then
+ * Once a second: every other time, another session's `/deck off`; then
  * what the notification rows said; then the clock for the open pane, while
  * something runs.
  */
@@ -692,7 +741,7 @@ const ticked = async ($: EngineInterface, session: Session): Promise<void> => {
       const status = row === undefined ? undefined : statusOf(row[1].status)
       const isWorth = status !== undefined && (status !== 'done' || at - job.startedAt >= TOLD_MS)
 
-      if (isWorth && job.kind === 'shell') {
+      if (isWorth && job.kind !== 'agent') {
         told($, session, `${GLYPHS[status]} ${job.title} · ${jobSpan({ ...job, endedAt: at }, at)}`)
       }
     }
@@ -723,6 +772,17 @@ const ticked = async ($: EngineInterface, session: Session): Promise<void> => {
   }
 
   const jobs = await read($, work)
+  // The main thread's turn is over and nothing it started runs on: its runs
+  // that no step moved since wait, so none runs on in the pane for good.
+  const isQuiet =
+    !session.isTurnOn && session.turnEndedAt > 0 && jobs.running.length === 0 && !(await isWoken($))
+  session.restTicks = isQuiet ? session.restTicks + 1 : 0
+
+  if (session.restTicks >= REST_TICKS && canRest(await read($, runs), session.turnEndedAt)) {
+    const at = await $.clock.now()
+    await update($, runs, (kept) => rested(kept, session.turnEndedAt, at))
+  }
+
   const isBusy = jobs.running.length > 0 || (await read($, runs)).some(isLive)
   const isUp = await isPaneUp($)
 
@@ -768,7 +828,12 @@ export const register: Register = (on, options) => {
     minted: 0,
     lengths: new Map(),
     hints: new Map(),
+    calls: new Map(),
+    questions: new Set(),
     dockCells: 0,
+    isTurnOn: false,
+    turnEndedAt: 0,
+    restTicks: 0,
     hasTool: options.modelTool === true,
     hasToasts: options.toasts !== false,
     hasRows: options.transcriptRows !== false,
@@ -788,7 +853,7 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: 'deck',
       description: 'A pane for the work behind the conversation: shells, agents, the model and its effort',
-      argumentHint: '[open|clear|row|watch|unwatch|close]',
+      argumentHint: '[open|clear|row|watch|unwatch|off|help]',
     })
     await followed($)
 
@@ -866,7 +931,15 @@ export const register: Register = (on, options) => {
       return { text: opened === PANE_OPENED ? answer.text : `${answer.text} ${opened}` }
     }
 
-    if (rest.length > 0) {
+    if (first === 'clear' && rest.length === 1 && rest[0]?.toLowerCase() === 'all') {
+      await sweptAll($)
+
+      return {
+        text: 'Deck is cleared: every run and what is over are out of the pane. What still runs stays.',
+      }
+    }
+
+    if (rest.length > 0 || first === 'help' || first === '?') {
       return { text: USAGE }
     }
 
@@ -892,13 +965,22 @@ export const register: Register = (on, options) => {
 
       return {
         text: isOff
-          ? 'Deck keeps its label as text on the hint line. /deck row brings its row back.'
+          ? ROW_AS_TEXT
           : 'Deck draws its label on a row under the hint line, where there is a pointer.',
       }
     }
 
     if (first === 'clear') {
       await sweptAway($)
+      const left = (await read($, runs)).length
+
+      if (left > 0) {
+        return {
+          text: `Deck is cleared: what is over is out of the pane. ${
+            left === 1 ? '1 run under way stays' : `${left} runs under way stay`
+          }: /deck clear all takes ${left === 1 ? 'it' : 'them'} too.`,
+        }
+      }
 
       return { text: 'Deck is cleared: what is over is out of the pane. What still runs stays.' }
     }
@@ -1003,7 +1085,7 @@ export const register: Register = (on, options) => {
   // seconds: a shell the person was asked about runs since then. Only the
   // call's id is read, while the row is drawn, and taken up by the next tick.
   on('ui.render', { component: 'ToolProgress' }, async ($, e, next) => {
-    if (e.props.kind === 'background_hint' && !session.hints.has(e.props.tool_use_id)) {
+    if (e.props.kind === 'background_hint' && !session.hints.has(e.props.tool_use_id) && !(await isClosed($))) {
       session.hints.set(e.props.tool_use_id, await $.clock.now())
     }
 
@@ -1027,6 +1109,68 @@ export const register: Register = (on, options) => {
     }
 
     return answer
+  })
+
+  // An MCP tool call of the main thread that its server took on as a task:
+  // of the answer, only the background task's id and the tool's full name
+  // are read, from the line Claude Code words it in. A question the server
+  // asks before the answer comes waits for the row. The call goes on as it
+  // came.
+  on('tool.call', async ($, e, next) => {
+    if (!e.tool.startsWith('mcp__') || e.tool.startsWith(DECK_TOOLS) || (await isClosed($))) {
+      return next(e)
+    }
+
+    const startedAt = await $.clock.now()
+    session.calls.set(e.tool, (session.calls.get(e.tool) ?? 0) + 1)
+    const answer = await next(e).finally(() => {
+      const left = (session.calls.get(e.tool) ?? 1) - 1
+
+      if (left > 0) {
+        session.calls.set(e.tool, left)
+      } else {
+        session.calls.delete(e.tool)
+      }
+    })
+    const task = answer.deny === undefined && answer.isError !== true ? mcpTaskOf(answer.text ?? '') : undefined
+
+    if (task !== undefined && e.agentId === undefined && !(await isClosed($))) {
+      const server = serverOf(task.name)
+      const isAsking = session.questions.delete(server)
+      session.minted += 1
+      const id = e.tool_use_id ?? `deck-${session.minted}`
+      await update($, work, (kept) => started(kept, mcpJob(id, task.taskId, task.name, startedAt, isAsking)))
+    }
+
+    return answer
+  })
+
+  // An MCP server asks the person a question, or has its answer: only the
+  // server's name is read, never the question or the answer. A task of it
+  // waits on the person meanwhile.
+  on('classic.Elicitation', async ($, e, next) => {
+    if (!(await isClosed($))) {
+      const server = e.mcp_server_name
+      const prefix = `mcp__${server.replace(/[^\w-]/g, '_')}__`
+
+      if ([...session.calls.keys()].some((tool) => tool.startsWith(prefix))) {
+        session.questions.add(server)
+      } else if (hasTaskOf(await read($, work), server)) {
+        await update($, work, (kept) => questioned(kept, server))
+      }
+    }
+
+    return next(e)
+  })
+
+  on('classic.ElicitationResult', async ($, e, next) => {
+    session.questions.delete(e.mcp_server_name)
+
+    if (!(await isClosed($))) {
+      await update($, work, (kept) => answered(kept, e.mcp_server_name))
+    }
+
+    return next(e)
   })
 
   // Claude Code's own task list, watched: a task's id and subject as it is
@@ -1102,7 +1246,9 @@ export const register: Register = (on, options) => {
       await update($, runs, (kept) => replanned(kept, run))
 
       return {
-        result: `Run ${run.id} is shown, and step ${first} is started. Call step as you move to the next one.\n${planText(run)}`,
+        result: `Run ${run.id} is shown, and step ${first} is started. As you move on, call step with the next step's id and start${
+          e.agentId === undefined ? ', and done on the last step when the job is finished' : '; your last step is done by itself when you answer'
+        }.\n${planText(run)}`,
       }
     })
 
@@ -1141,7 +1287,7 @@ export const register: Register = (on, options) => {
       const leaves = leavesOf(turned.run)
 
       return {
-        result: `${id} ${word} (${leaves.filter((leaf) => leaf.status === 'done').length}/${leaves.length} done)`,
+        result: `${id} ${word} (${leaves.filter((leaf) => leaf.status === 'done').length}/${leaves.length} done).${hintOf(turned.run, id, word)}`,
       }
     })
   }
@@ -1212,9 +1358,26 @@ export const register: Register = (on, options) => {
     return answer
   })
 
+  // A turn of the main thread begins: nothing of it is read, its prompt
+  // included. While it runs, the main thread's runs do not wait.
+  on('turn.start', async ($, e, next) => {
+    if (e.agentId === undefined && !(await isClosed($))) {
+      session.isTurnOn = true
+      session.restTicks = 0
+    }
+
+    return next(e)
+  })
+
   on('turn.complete', async ($, e, next) => {
+    if (e.agentId === undefined && !(await isClosed($))) {
+      session.isTurnOn = false
+      session.turnEndedAt = await $.clock.now()
+      session.restTicks = 0
+    }
+
     if (!(await isClosed($))) {
-        if (e.agentId !== undefined) {
+      if (e.agentId !== undefined) {
         const id = e.agentId
         const at = await $.clock.now()
         const status = STATUS_BY_REASON[e.reason] ?? 'ended'
@@ -1234,13 +1397,16 @@ export const register: Register = (on, options) => {
     return next(e)
   })
 
-  // What still runs in the background when Claude stops, by id: a shell the
-  // deck lists that Claude Code no longer does has ended unseen.
+  // What still runs in the background when Claude stops, by id: a shell or
+  // MCP task the deck lists that Claude Code no longer does has ended unseen.
+  // An MCP task Claude Code lists that the deck has no row of gets one, named
+  // by its server and tool.
   on('classic.Stop', async ($, e, next) => {
     if (e.background_tasks !== undefined && !(await isClosed($))) {
-      const alive = e.background_tasks.map((task) => task.id)
+      const tasks = e.background_tasks
+      const alive = tasks.map((task) => task.id)
       const at = await $.clock.now()
-      await update($, work, (kept) => settled(kept, alive, at))
+      await update($, work, (kept) => settled(listed(kept, tasks, at), alive, at))
     }
 
     return next(e)
@@ -1346,6 +1512,9 @@ export const register: Register = (on, options) => {
       onClear: () => {
         void sweptAway($)
       },
+      onDrop: (row) => {
+        void droppedRun($, row.key)
+      },
       onFold: (row) => {
         void update($, folds, (kept) => ({ ...kept, [row.key]: !(kept[row.key] ?? row.isOpen) }))
       },
@@ -1444,6 +1613,7 @@ export const register: Register = (on, options) => {
       onPress: () => pressed($, toggled($)),
       onClose: () => {
         void rowClosedAs($, true)
+        $.ui.toast(ROW_AS_TEXT)
       },
     }
 

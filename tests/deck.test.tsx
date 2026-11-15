@@ -39,6 +39,9 @@ const said = (args: string) =>
  * panes it holds open, what a Bash call answers and the effort each request
  * of the model went out with.
  */
+/** The world's MCP tool, `build` of the server `plugin:shop:ci`. */
+const SHOP_BUILD = 'mcp__plugin_shop_ci__build'
+
 const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
   const clock = mock.clock(on, { now: 1_000_000 })
   const store = new Map(Object.entries(entries))
@@ -53,6 +56,8 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
   const tools: string[] = []
   const toasts: string[] = []
   const stops: string[] = []
+  // Whether Claude Code refuses the next TaskStop.
+  const stopping = { isDenied: false }
   const tasks = { count: 0, prompts: [] as string[] }
   // Whether Claude Code draws a pane it is asked to open, or keeps it waiting.
   // On a narrow terminal it draws only what the person asked for: an open made
@@ -134,10 +139,25 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
   })
   on('classic.Notification', () => ({}))
   on('tool.call', { tool: 'TaskStop' }, (_$, e) => {
+    if (stopping.isDenied) {
+      return { deny: 'Not now.' }
+    }
+
     stops.push(e.tool === 'TaskStop' ? (e.task_id ?? '') : '')
 
     return { result: { message: 'stopped', task_id: stops.at(-1) ?? '', task_type: 'shell' } }
   })
+  // An MCP server's tool, `plugin:shop:ci/build`: what its call answers, as
+  // Claude Code words one its server took on as a task, and what happens
+  // before the answer comes.
+  const mcp = { text: '', before: async () => {} }
+  on('tool.call', { tool: new RegExp(`^${SHOP_BUILD}$`) }, async () => {
+    await mcp.before()
+
+    return { result: [{ type: 'text', text: mcp.text }], text: mcp.text }
+  })
+  on('classic.Elicitation', () => ({}))
+  on('classic.ElicitationResult', () => ({}))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
@@ -154,8 +174,10 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
       cost: { usd: 1.239 },
     },
   }))
-  // A press is the person's ask while its handler runs, the work it hands back included.
-  on('ui.press', async (_$, e, next) => {
+  // A press is the person's ask while its handler runs, the work it hands back
+  // included. A press is addressed to the plugin that drew the element, and
+  // from Claude Code 2.1.325 a hook beneath hears it only when it names that plugin.
+  on('ui.press', { plugin: 'deck' }, async (_$, e, next) => {
     person.presses += 1
 
     try {
@@ -244,6 +266,7 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
       usage: null,
     }
   })
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }))
   on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('classic.Stop', () => ({}))
   on('classic.PermissionRequest', () => ({}))
@@ -282,6 +305,8 @@ const world = (on: On, entries: Readonly<Record<string, unknown>> = {}) => {
     prompts: tasks.prompts,
     toasts,
     stops,
+    stopping,
+    mcp,
     model,
     hint,
     seat,
@@ -410,6 +435,105 @@ test('a background shell Claude Code no longer lists when it stops is closed', a
 
   await $.classic.Stop({ stop_hook_active: false, background_tasks: [] })
   expect(await tail($)).toBe('Fable 5.1')
+})
+
+/** A call of the MCP tool the world's server has, which the types do not list. */
+const mcpCalled = ($: Engine, input: Readonly<Record<string, unknown>> = {}) =>
+  $.tool.call({ tool: SHOP_BUILD, ...input } as never)
+
+/** How Claude Code answers an MCP call its server took on as a task. */
+const taskAnswer = (taskId: string): string =>
+  `MCP tool "plugin:shop:ci/build" started server-side task srv-1. It was moved to the background as task ${taskId} ` +
+  'and keeps running on the server; you will be notified when it completes.'
+
+test('an MCP task runs in its own section from its call\'s answer until its notification row', async ($, on) => {
+  const { clock, mcp, toasts } = world(on)
+  await $.session.start(SESSION)
+  mcp.text = taskAnswer('task-9')
+  await mcpCalled($, { tool_use_id: 'toolu_m' })
+
+  expect(await paneTexts($)).toEqual(expect.arrayContaining(['MCP TASKS · 1', 'ci/build']))
+  expect(await tail($)).toBe('Fable 5.1 · ⏵ 1')
+
+  await clock.advance(40_000)
+  await notified($, 'task-9', 'completed', 40_000)
+  await clock.advance(1_000)
+  expect(await tail($)).toBe('Fable 5.1')
+  expect(await paneTexts($)).toEqual(expect.arrayContaining(['✓', 'ci/build', '40s']))
+  expect(toasts).toEqual(['✓ ci/build · 41s'])
+})
+
+test('an MCP call its server answered in place, or a subagent made, gets no row', async ($, on) => {
+  const { mcp } = world(on)
+  await $.session.start(SESSION)
+  mcp.text = '{"status":"green"}'
+  await mcpCalled($)
+  mcp.text = taskAnswer('task-9')
+  await mcpCalled($, { agentId: 'agent-1' })
+
+  expect(await paneTexts($)).not.toContain('MCP TASKS · 1')
+})
+
+test('an MCP task whose server asks before it answers waits until the person answers', async ($, on) => {
+  const { mcp } = world(on)
+  await $.session.start(SESSION)
+  mcp.text = taskAnswer('task-9')
+  // The server asks the person before the call's answer comes.
+  mcp.before = async () => {
+    await $.classic.Elicitation({ mcp_server_name: 'plugin:shop:ci', message: 'Which environment?', mode: 'form' })
+  }
+  await mcpCalled($)
+
+  expect(await paneTexts($)).toEqual(expect.arrayContaining(['?', 'ci/build', 'waits']))
+  expect(await tail($)).toBe('Fable 5.1')
+
+  await $.classic.ElicitationResult({ mcp_server_name: 'plugin:shop:ci', action: 'accept' })
+  expect(await paneTexts($)).not.toContain('waits')
+  expect(await tail($)).toBe('Fable 5.1 · ⏵ 1')
+})
+
+test('a running MCP task waits on a question its server asks later', async ($, on) => {
+  const { mcp } = world(on)
+  await $.session.start(SESSION)
+  mcp.text = taskAnswer('task-9')
+  await mcpCalled($)
+
+  await $.classic.Elicitation({ mcp_server_name: 'plugin:other:x', message: 'Sure?', mode: 'form' })
+  expect(await paneTexts($)).not.toContain('waits')
+
+  await $.classic.Elicitation({ mcp_server_name: 'plugin:shop:ci', message: 'Sure?', mode: 'form' })
+  expect(await paneTexts($)).toEqual(expect.arrayContaining(['?', 'waits']))
+  await $.classic.ElicitationResult({ mcp_server_name: 'plugin:shop:ci', action: 'decline' })
+  expect(await paneTexts($)).not.toContain('waits')
+})
+
+test('an MCP task whose answer the deck could not read gets its row when Claude stops', async ($, on) => {
+  const { mcp } = world(on)
+  await $.session.start(SESSION)
+  mcp.text = 'The task went somewhere new as kj2mup0da.'
+  await mcpCalled($)
+  expect(await tail($)).toBe('Fable 5.1')
+
+  const task = { id: 'kj2mup0da', type: 'MCP task', status: 'running', description: 'plugin:shop:ci/build' }
+  await $.classic.Stop({
+    stop_hook_active: false,
+    background_tasks: [{ ...task, server: 'plugin:shop:ci', tool: 'build' }],
+  })
+  expect(await paneTexts($)).toEqual(expect.arrayContaining(['MCP TASKS · 1', 'ci/build']))
+
+  await $.classic.Stop({ stop_hook_active: false, background_tasks: [] })
+  expect(await tail($)).toBe('Fable 5.1')
+})
+
+test('an MCP task stopped with TaskStop ends as killed', async ($, on) => {
+  const { mcp } = world(on)
+  await $.session.start(SESSION)
+  mcp.text = taskAnswer('task-9')
+  await mcpCalled($)
+  await $.tool.call({ tool: 'TaskStop', task_id: 'task-9' })
+
+  expect(await tail($)).toBe('Fable 5.1')
+  expect(await paneTexts($)).toEqual(expect.arrayContaining(['■', 'ci/build']))
 })
 
 test('a subagent is listed from its spawn to the end of its turn', async ($, on) => {
@@ -586,7 +710,7 @@ test(
     const plan = await $.tool.call({ tool: 'mcp__deck__plan', title: 'Auth renewal', steps: PLAN })
     expect(plan.result).toBe(
       [
-        'Run r1 is shown, and step 1.1 is started. Call step as you move to the next one.',
+        "Run r1 is shown, and step 1.1 is started. As you move on, call step with the next step's id and start, and done on the last step when the job is finished.",
         '1 Token rotation',
         '1.1 Write the rotation',
         '1.2 Test it',
@@ -601,7 +725,7 @@ test(
     await clock.advance(90_000)
     // Starting the next step ends the one before it under the same parent.
     const next = await $.tool.call({ tool: 'mcp__deck__step', id: '1.2', state: 'start' })
-    expect(next.result).toBe('1.2 start (1/5 done)')
+    expect(next.result).toBe('1.2 start (1/5 done). Next: 2.1.')
     expect(await tail($)).toBe('Fable 5.1 · Auth renewal 1/5')
 
     const texts = await paneTexts($)
@@ -838,7 +962,7 @@ test('a long command is bounded to eight lines worth of characters', async ($, o
 })
 
 test(
-  'a cut run leaf opens its full title by title or mark, keeping its state apart from the run fold',
+  'a cut run leaf opens its full title by its title, keeping its state glyph in the mark column',
   { options: { modelTool: true } },
   async ($, on) => {
     world(on)
@@ -850,46 +974,86 @@ test(
       expect(await pane.find({ key: 'step:r1/2' })).toBeUndefined()
       expect(await pane.find({ type: 'Text', text: 'Ship' })).toBeDefined()
       expect(await pane.find({ key: 'fold:r1/1' })).toBeUndefined()
+      expect(await pane.find({ key: 'step-mark:r1/1' })).toBeUndefined()
+      // The running leaf's glyph stands alone: no fold mark beside it.
       expect(await pane.find({ type: 'Text', text: '⏵' })).toBeDefined()
-      for (const key of ['step:r1/1', 'step-mark:r1/1']) {
-        expect((await pane.find({ key: 'step-mark:r1/1' }))?.props.label).toBe('▸')
-        expect((await pane.find({ key: 'step:r1/1' }))?.props.label).toBe(`${title.slice(0, 40)}…`)
-        expect(await pane.find({ type: 'Text', text: title })).toBeUndefined()
-        await pane.press({ key })
-        expect((await pane.find({ key: 'step-mark:r1/1' }))?.props.label).toBe('▾')
-        expect((await pane.find({ type: 'Text', text: title }))?.props.wrap).toBe('wrap')
-        expect((await pane.find({ key: 'fold:r1' }))?.props.label).toBe('▾')
-        await pane.press({ key: 'fold:r1' })
-        expect(await pane.find({ type: 'Text', text: title })).toBeUndefined()
-        await pane.press({ key: 'fold:r1' })
-        expect((await pane.find({ type: 'Text', text: title }))?.props.wrap).toBe('wrap')
-        await pane.press({ key })
-        expect((await pane.find({ key: 'step-mark:r1/1' }))?.props.label).toBe('▸')
-        expect(await pane.find({ type: 'Text', text: title })).toBeUndefined()
-      }
+      expect((await pane.find({ key: 'step:r1/1' }))?.props.label).toBe(`${title.slice(0, 48)}…`)
+      expect(await pane.find({ type: 'Text', text: title })).toBeUndefined()
+      await pane.press({ key: 'step:r1/1' })
+      expect((await pane.find({ type: 'Text', text: title }))?.props.wrap).toBe('wrap')
+      expect((await pane.find({ key: 'fold:r1' }))?.props.label).toBe('▾')
+      await pane.press({ key: 'fold:r1' })
+      expect(await pane.find({ type: 'Text', text: title })).toBeUndefined()
+      await pane.press({ key: 'fold:r1' })
+      expect((await pane.find({ type: 'Text', text: title }))?.props.wrap).toBe('wrap')
+      await pane.press({ key: 'step:r1/1' })
+      expect(await pane.find({ type: 'Text', text: title })).toBeUndefined()
       await pane.unmount()
     }
   },
 )
 
 test(
-  'a leaf at the title width stays text, and one character past it can open',
+  'a row keeps cells only for the columns it shows: a leaf stays text at the width its columns leave, and one character past it can open',
   { options: { modelTool: true } },
   async ($, on) => {
     world(on)
     await $.session.start(SESSION)
-    const fits = 'F'.repeat(43)
-    const cut = 'C'.repeat(44)
-    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Boundary', steps: `${fits}\n${cut}` })
+    // 64 cells: two of padding, the indent, the mark, a spare cell, and the
+    // span's eight where the leaf has begun. A leaf not begun has no span.
+    const fits = 'F'.repeat(49)
+    const pending = 'P'.repeat(57)
+    const cut = 'C'.repeat(58)
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Boundary', steps: `${fits}\n${pending}\n${cut}` })
     const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
     expect((await pane.find({ type: 'Text', text: fits }))?.props.wrap).toBe('truncate-end')
     expect(await pane.find({ key: 'step:r1/1' })).toBeUndefined()
-    expect(await pane.find({ key: 'step-mark:r1/1' })).toBeUndefined()
-    expect((await pane.find({ key: 'step:r1/2' }))?.props.label).toBe(`${'C'.repeat(40)}…`)
-    await pane.press({ key: 'step:r1/2' })
+    // A pending leaf's title uses the cells of the empty count and span.
+    expect((await pane.find({ type: 'Text', text: pending }))?.props.wrap).toBe('truncate-end')
+    expect(await pane.find({ key: 'step:r1/2' })).toBeUndefined()
+    expect((await pane.find({ key: 'step:r1/3' }))?.props.label).toBe(`${'C'.repeat(56)}…`)
+    await pane.press({ key: 'step:r1/3' })
     expect((await pane.find({ type: 'Text', text: cut }))?.props.wrap).toBe('wrap')
-    expect((await pane.find({ key: 'step:r1/2' }))?.props.dimColor).toBe(false)
+    expect((await pane.find({ key: 'step:r1/3' }))?.props.dimColor).toBe(false)
     await pane.unmount()
+  },
+)
+
+test(
+  'a leaf running takes the span\'s cells: one character past the width it leaves is cut',
+  { options: { modelTool: true } },
+  async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Boundary', steps: 'R'.repeat(50) })
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect((await pane.find({ key: 'step:r1/1' }))?.props.label).toBe(`${'R'.repeat(48)}…`)
+    await pane.unmount()
+  },
+)
+
+test(
+  'leaf titles start at the same cell whether they are cut or not',
+  { options: { modelTool: true } },
+  async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Align', steps: `Short\n${'L'.repeat(56)}` })
+    // The cells of the marks: the run's fold, one for each leaf, and the run's ×.
+    // A cut leaf has no second column for its glyph, so its title starts where
+    // the title of a leaf that fits does: the count of these boxes does not
+    // change when the second title is cut.
+    const marks = async (bodyColumns: number): Promise<number> => {
+      const pane = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns } })
+      const found = (await pane.findAll({ type: 'Box' })).filter((box) => box.props.width === 2).length
+      const isCut = (await pane.find({ key: 'step:r1/2' })) !== undefined
+      await pane.unmount()
+      expect(isCut).toBe(bodyColumns < 64)
+
+      return found
+    }
+
+    expect(await marks(36)).toBe(await marks(64))
   },
 )
 
@@ -921,10 +1085,10 @@ test(
         expect([...label].length + fixed).toBe(bodyColumns)
         expect((await pane.find({ key: `job-mark:${id}` }))?.props.label).toBe('▸')
       }
-      // A leaf has a count column too; the nested run adds one indent level.
+      // A leaf has no count, only a span; the nested run adds one indent level.
       for (const [id, indent] of [['r1/1', 1], ['r2/1', 0]] as const) {
         const label = String((await pane.find({ key: `step:${id}` }))?.props.label)
-        const fixed = 2 + 4 + 2 * (1 + indent) + 6 + 8 + 1
+        const fixed = 2 + 2 + 2 * (1 + indent) + 8 + 1
         expect(label).toBe(`${title.slice(0, bodyColumns - fixed - 1)}…`)
         expect([...label].length + fixed).toBe(bodyColumns)
       }
@@ -1066,6 +1230,131 @@ test(
   },
 )
 
+test(
+  'a run row\'s × takes that run out of the pane while it is under way, and the others stay',
+  { options: { modelTool: true } },
+  async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Side job', steps: 'Only', agentId: 'agent-1' })
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Open job', steps: 'One\nTwo' })
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+    expect((await pane.find({ key: 'drop:r1' }))?.props.dimColor).toBe(true)
+    expect(await pane.find({ key: 'drop:r2' })).toBeDefined()
+    // A step's row has no ×.
+    expect(await pane.find({ key: 'drop:r2/1' })).toBeUndefined()
+    await pane.press({ key: 'drop:r2' })
+    await pane.unmount()
+
+    const texts = await paneTexts($)
+    expect(texts).not.toContain('Open job')
+    expect(texts.some((text) => text.startsWith('Side job'))).toBe(true)
+  },
+)
+
+test(
+  '/deck clear all takes the runs under way out too, and what still runs stays',
+  { options: { modelTool: true } },
+  async ($, on) => {
+    const { bash } = world(on)
+    await $.session.start(SESSION)
+    bash.result = { backgroundTaskId: 'task-1' }
+    await $.tool.call({ tool: 'Bash', command: 'npm run dev', description: 'Dev server', run_in_background: true })
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Open job', steps: 'One\nTwo' })
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Side job', steps: 'Only', agentId: 'agent-1' })
+
+    expect(await run($, 'clear all')).toBe(
+      'Deck is cleared: every run and what is over are out of the pane. What still runs stays.',
+    )
+    const texts = await paneTexts($)
+    expect(texts).not.toContain('Open job')
+    expect(texts).not.toContain('Side job')
+    expect(texts).toContain('Dev server')
+    expect(await run($, 'clear all now')).toContain('Usage:')
+    expect(await run($, 'open all')).toContain('Usage:')
+  },
+)
+
+test(
+  '/deck clear counts the runs under way that stay, and says how to take them too',
+  { options: { modelTool: true } },
+  async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    expect(await run($, 'clear')).toBe('Deck is cleared: what is over is out of the pane. What still runs stays.')
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Open job', steps: 'One\nTwo' })
+    expect(await run($, 'clear')).toBe(
+      'Deck is cleared: what is over is out of the pane. 1 run under way stays: /deck clear all takes it too.',
+    )
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Side job', steps: 'Only', agentId: 'agent-1' })
+    expect(await run($, 'clear')).toBe(
+      'Deck is cleared: what is over is out of the pane. 2 runs under way stay: /deck clear all takes them too.',
+    )
+  },
+)
+
+test('/deck off is the name for the deck away in every session, and /deck help answers the usage', async ($, on) => {
+  const { store, panes } = world(on)
+  await $.session.start(SESSION)
+  await run($, 'open')
+
+  const usage = await run($, 'help')
+  expect(usage).toContain('Usage:')
+  expect(usage).toContain('/deck clear all')
+  expect(usage).toContain('/deck off')
+  expect(usage).toContain('/deck help')
+  expect(usage).not.toContain('/deck close')
+  expect(await run($, '?')).toBe(usage)
+  expect(await run($, 'nonsense')).toBe(usage)
+
+  expect(await run($, 'off')).toContain('Deck is closed in every session')
+  expect(store.get('closed')).toBe(true)
+  expect([...panes]).toEqual([])
+  expect(await run($, 'quit')).toContain('Deck is closed in every session')
+})
+
+test('a stop that did not work says so in a toast', async ($, on) => {
+  const { bash, stops, stopping, toasts } = world(on)
+  await $.session.start(SESSION)
+  bash.result = { backgroundTaskId: 'task-1' }
+  await $.tool.call({
+    tool: 'Bash',
+    command: 'npm run dev',
+    description: 'Start the dev server',
+    run_in_background: true,
+    tool_use_id: 'toolu_1',
+  })
+  stopping.isDenied = true
+  const pane = await $.ui.mount({ ...PANE, surface: 'terminal' })
+  await pane.press({ key: 'job:toolu_1' })
+  await pane.press({ key: 'stop:toolu_1' })
+  await pane.unmount()
+
+  expect(stops).toEqual([])
+  expect(toasts).toEqual(['Could not stop Start the dev server.'])
+})
+
+test(
+  'a cut run title is a button that opens the full title under the run, apart from its fold',
+  { options: { modelTool: true } },
+  async ($, on) => {
+    world(on)
+    await $.session.start(SESSION)
+    const title = 'Renew every certificate of the staging cluster'
+    await $.tool.call({ tool: 'mcp__deck__plan', title, steps: 'One\nTwo' })
+    const pane = await $.ui.mount({ ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 36 } })
+    expect((await pane.find({ key: 'step:r1' }))?.props.label).toContain('…')
+    expect(await pane.find({ type: 'Text', text: title })).toBeUndefined()
+    await pane.press({ key: 'step:r1' })
+    expect((await pane.find({ type: 'Text', text: title }))?.props.wrap).toBe('wrap')
+    // The fold keeps its own key and the run stays open.
+    expect((await pane.find({ key: 'fold:r1' }))?.props.label).toBe('▾')
+    await pane.press({ key: 'step:r1' })
+    expect(await pane.find({ type: 'Text', text: title })).toBeUndefined()
+    await pane.unmount()
+  },
+)
+
 test('out of the box nothing of the session is written to the store', async ($, on) => {
   const { clock, store, bash } = world(on)
   await $.session.start(SESSION)
@@ -1165,8 +1454,8 @@ test(
   },
 )
 
-test('the label joins a row another mod drew under the hint line, and its × sends it back to the line as text', async ($, on) => {
-  const { store, hint } = world(on)
+test('the label joins a row another mod drew under the hint line, and its × sends it back to the line as text and says how to bring it back', async ($, on) => {
+  const { store, hint, toasts } = world(on)
   hint.row = 'timer 18:42'
   await $.session.start(SESSION)
 
@@ -1178,6 +1467,7 @@ test('the label joins a row another mod drew under the hint line, and its × sen
 
   await ui.press({ key: 'deck-row-close' })
   expect(store.get('row-closed')).toBe(true)
+  expect(toasts).toEqual(['Deck keeps its label as text on the hint line. /deck row brings its row back.'])
   expect(await ui.find({ key: 'deck' })).toBeUndefined()
   expect((await ui.find({ type: 'Text' }))?.text).toBe('Fable 5.1')
   await ui.unmount()
@@ -1314,10 +1604,10 @@ test(
       return found
     }
 
-    expect(await texts(64)).toEqual(expect.arrayContaining(['▱▱▱▱▱▱▱▱', 'shell', '0/2']))
-    const narrow = await texts(30)
+    expect(await texts(64)).toEqual(expect.arrayContaining(['▰▰▱▱▱▱▱▱', 'shell', '0/2']))
+    const narrow = await texts(34)
     expect(narrow).toEqual(expect.arrayContaining(['Fix the bug', '0/2']))
-    expect(narrow).not.toContain('▱▱▱▱▱▱▱▱')
+    expect(narrow).not.toContain('▰▰▱▱▱▱▱▱')
     expect(narrow).not.toContain('shell')
   },
 )
@@ -1667,7 +1957,7 @@ test(
     // Narrow, the step's title is cut and opens to the whole of it.
     const narrow = { ...PANE, surface: 'terminal', props: { ...PANE.props, bodyColumns: 36 } } as const
     const pane = await $.ui.mount(narrow)
-    await pane.press({ key: 'step-mark:r1/1' })
+    await pane.press({ key: 'step:r1/1' })
     await pane.unmount()
     // A finished subagent's run gives the clear something to take.
     await $.tool.call({ tool: 'mcp__deck__plan', title: 'Side', steps: 'Only', agentId: 'agent-1' })
@@ -1700,4 +1990,128 @@ test('the switches every session shares cost one read of the store while none is
   expect(await run($, 'row')).toContain('as text')
   await clock.advance(2_000)
   expect(reads).toEqual(['row-closed'])
+})
+
+/** The main thread's turn, from its start to its answer. */
+const TURN = { text: '', turnId: 'turn-1' } as const
+const ANSWER = { answer: 'ok', durationMs: 1, isAborted: false, turnId: 'turn-1', reason: 'answer' } as const
+
+test(
+  'a plan the main thread leaves when its turn ends waits: its clock holds, the label lets it go, a step moves it on, a clear takes it and no half hour does',
+  { options: { modelTool: true } },
+  async ($, on) => {
+    const { clock } = world(on)
+    await $.session.start(SESSION)
+    await $.turn.start(TURN)
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Orca', steps: 'One\nTwo\nThree\nFour' })
+
+    // While its turn runs the plan runs, with no shell and no agent: the pane does not say nothing runs.
+    await clock.advance(60_000)
+    expect(await tail($)).toBe('Fable 5.1 · Orca 0/4')
+    expect(await paneTexts($)).not.toContain('Nothing runs right now.')
+
+    // The turn ends with three steps nobody started: the plan waits, five seconds on.
+    await $.turn.complete(ANSWER)
+    await clock.advance(4_000)
+    expect(await tail($)).toBe('Fable 5.1 · Orca 0/4')
+    await clock.advance(1_000)
+    expect(await tail($)).toBe('Fable 5.1')
+    await clock.advance(10 * 60_000)
+    const waiting = await paneTexts($)
+    expect(waiting).toEqual(expect.arrayContaining(['Nothing runs right now.', 'Orca', '‖', '0/4', '1m 05s', '× clear']))
+    expect(waiting).not.toContain('⏵')
+
+    // A step called in a later turn moves it on from where it stood.
+    await $.turn.start(TURN)
+    await $.tool.call({ tool: 'mcp__deck__step', id: '2', state: 'start' })
+    expect(await tail($)).toBe('Fable 5.1 · Orca 1/4')
+
+    await $.turn.complete(ANSWER)
+    await clock.advance(5_000)
+    await run($, 'clear')
+    expect(await paneTexts($)).not.toContain('Orca')
+
+    // No half hour takes one that waits: the person may answer long after, and a step then finds it.
+    await $.turn.start(TURN)
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Lume', steps: 'One\nTwo' })
+    await $.turn.complete(ANSWER)
+    await clock.advance(45 * 60_000)
+    expect(await paneTexts($)).toContain('Lume')
+    await $.turn.start(TURN)
+    expect((await $.tool.call({ tool: 'mcp__deck__step', id: '2', state: 'start' })).result).toContain('2 start (1/2 done)')
+
+    // A new plan of the same loop stops it for good, and the half hour takes it then.
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Next', steps: 'One\nTwo' })
+    await clock.advance(31 * 60_000)
+    expect(await paneTexts($)).not.toContain('Lume')
+  },
+)
+
+test(
+  "the main thread's last step is its own to end: an answer leaves it, since a turn may end on a question",
+  { options: { modelTool: true } },
+  async ($, on) => {
+    const { toasts } = world(on)
+    await $.session.start(SESSION)
+    await $.turn.start(TURN)
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Orca', steps: 'One\nTwo' })
+    const last = await $.tool.call({ tool: 'mcp__deck__step', id: '2', state: 'start' })
+    expect(last.result).toBe('2 start (1/2 done). It is the last step: call done when it is finished.')
+
+    // The turn ends with the last step half made: nothing says the job is over.
+    await $.turn.complete(ANSWER)
+    expect(toasts).toEqual([])
+    expect(await tail($)).toBe('Fable 5.1 · Orca 1/2')
+
+    await $.turn.start(TURN)
+    await $.tool.call({ tool: 'mcp__deck__step', id: '2', state: 'done' })
+    expect(toasts).toEqual(['✓ Orca 2/2'])
+    expect(await tail($)).toBe('Fable 5.1')
+  },
+)
+
+test(
+  "a plan runs on past its turn's end while a background job the turn started runs, and through the turn that job's end starts",
+  { options: { modelTool: true } },
+  async ($, on) => {
+    const { clock, bash } = world(on)
+    await $.session.start(SESSION)
+    await $.turn.start(TURN)
+    await $.tool.call({ tool: 'mcp__deck__plan', title: 'Orca', steps: 'Build\nShip' })
+    bash.result = { backgroundTaskId: 'task-1' }
+    await $.tool.call({ tool: 'Bash', command: 'make', run_in_background: true })
+    await $.turn.complete(ANSWER)
+    await clock.advance(60_000)
+    expect(await tail($)).toBe('Fable 5.1 · ⏵ 1 · Orca 0/2')
+
+    // The job ends, and its notification starts a turn before the five seconds are up.
+    await notified($, 'task-1', 'completed')
+    await clock.advance(2_000)
+    await $.turn.start(TURN)
+    await clock.advance(60_000)
+    expect(await tail($)).toBe('Fable 5.1 · Orca 0/2')
+
+    await $.turn.complete(ANSWER)
+    await clock.advance(5_000)
+    expect(await tail($)).toBe('Fable 5.1')
+  },
+)
+
+test('a task list left under way waits when the turn ends, and a task that moves brings it back', async ($, on) => {
+  const { clock } = world(on)
+  await $.session.start(SESSION)
+  await $.turn.start(TURN)
+
+  for (const subject of ['Read the code', 'Write the report']) {
+    await $.tool.call({ tool: 'TaskCreate', subject, description: 'Not read by the deck' })
+  }
+
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'in_progress' })
+  await $.turn.complete(ANSWER)
+  await clock.advance(5_000)
+  expect(await tail($)).toBe('Fable 5.1')
+  expect(await paneTexts($)).toEqual(expect.arrayContaining(['Tasks', '‖', '0/2']))
+
+  await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'completed' })
+  expect(await tail($)).toBe('Fable 5.1 · Tasks 1/2')
 })

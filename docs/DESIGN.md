@@ -10,6 +10,8 @@ One mod, three layers.
 2. **A pane beside the conversation**, made of sections. Each section is one source of data, so a new feature is a new section.
 3. **Runs**: step-by-step progress of any job, as a tree of any depth (story, task, subtask). Several runs can go at once.
 
+The drawing below is the one agreed on before 0.1, kept as the record of it. The pane has changed since: its sections are `SHELLS`, `MCP TASKS` and `AGENTS`, each row begins with a fold mark, and it has no header row of its own. README has the pane as it is.
+
 ```
 ✻ Deck                                                      ×
  Fable 5.1   ▰▰▰▱▱ high ⟳        ctx ▰▰▱▱▱▱▱▱ 23%
@@ -46,6 +48,7 @@ One mod, three layers.
 | A shell's start, duration, failure | `tool.call` on `Bash`: `description`, `command`, `run_in_background` | Known |
 | A background shell's end | The notification row's own fields (`UserMessage`, `origin.kind: 'task-notification'`, `props.task`: `id`, `status`), and `classic.Stop`'s `background_tasks` | Checked, see below |
 | Subagents | `agent.spawn`, `$.agent.list()` | Known |
+| An MCP task's start, question and end | The line of an MCP call's answer that names its background task; `classic.Elicitation` and `classic.ElicitationResult`, by server; the notification row and `classic.Stop` as for a shell | Checked, see below |
 | Runs | The feeds below | |
 
 There is no call that lists running tasks, so background shells are tracked from events.
@@ -79,7 +82,7 @@ A subagent sees the mod's tool as the main thread does (checked, see below), so 
 
 ## What it reads that the other mods do not
 
-`description` of a `Bash` call, or the first line of its `command` where it has none, kept in memory only as the row's title. Nothing of it goes to disk or to the network. README and PRIVACY.md say so. It reads no prompt's text, a task notification's included: see [Checked](#checked).
+`description` of a `Bash` call, or the first line of its `command` where it has none, kept in memory only as the row's title. Of an MCP tool call's answer, the one line that names the background task it became, for the task's id and the tool's full name. Nothing of it goes to disk or to the network. README and PRIVACY.md say so. It reads no prompt's text, a task notification's included: see [Checked](#checked).
 
 ## Order
 
@@ -94,7 +97,7 @@ A subagent sees the mod's tool as the main thread does (checked, see below), so 
 - **The label is a button on a row of its own** under the hint line where there is a pointer, as pomodoro's row is: the hint line's own tail is text and cannot be pressed. Elsewhere it is the tail.
 - **The meter hands the effort back** when a step lands on Claude Code's own level, and by `/deck effort auto`, besides `/effort`. Its mark is `⟳` while the deck sets the effort and `↑` while Claude Code does.
 - **The file feed is gone** (0.5). It was built as 0.3 and taken out: a file belongs to a folder, not to a session, so a script's run showed in sessions it had nothing to do with, first in every project and then in every session of one. What a run shows is what happens in its session; a script's stages are shown by the agent that runs it, through the tool. The mod reads no file again. As first built: the feed read `.deck/*.jsonl` at the session's project root: a `run` line with the plan, then `step` lines. README has the format. It first read `~/.deck`, which put one script's run into every session of every project; a run belongs to the session whose work it is, and the project folder is the nearest a script can name.
-- **Any agent uses the mod, with nothing written into its definition.** With Tool for Claude on, `plan` and `step` are listed for the main thread and for every subagent of any type, and one note tells each agent they are there: a section of the main thread's system prompt, and a line at the end of every subagent's task. Descriptions alone did not do it: on a machine with 500 tools both are listed by name only, and an agent given a three-stage job with no word of the deck called neither. No agent is named anywhere in the mod, and none has to be changed for it. The limit is Claude Code's: an agent whose definition lists its `tools` without these two is refused them. Work that is no agent at all, a script, reports through the file feed.
+- **Any agent uses the mod, with nothing written into its definition.** With Tool for Claude on, `plan` and `step` are listed for the main thread and for every subagent of any type, and one note tells each agent they are there: a section of the main thread's system prompt, and a line at the end of every subagent's task. Descriptions alone did not do it: on a machine with 500 tools both are listed by name only, and an agent given a three-stage job with no word of the deck called neither. No agent is named anywhere in the mod, and none has to be changed for it. The limit is Claude Code's: an agent whose definition lists its `tools` without these two is refused them. Work that is no agent at all, a script, was to report through the file feed, which is gone: the agent that runs it reports its stages.
 
 ## 0.4
 
@@ -164,6 +167,32 @@ A pass over what a narrow terminal and a long session showed, after a report tha
 
 **An agent's row says its model and effort.** In the pane a subagent's row ended with its time alone, and which model and effort it ran with took a press to see. Now the row's end has the model's first word and its effort's bar in the level's color, `Opus ▰▰▰▱▱`, where `RECENT` would say `agent`; the kind is plain from it. Both come from what the deck already read: the model from the agent's start, the effort from its requests. Below 44 columns the bar goes, below 36 the name, as a run's bar and a row's kind do, so the title keeps its room. The opened row still has the full name and the level's word.
 
+## 0.9
+
+**MCP tasks.** Claude Code 2.1.304 runs an MCP tool call its server takes on as a task (MCP Tasks, protocol revision 2026-07-28) in the background: it polls the server, and the task's end arrives as a notification that starts a turn when Claude is idle. The deck lists them as a third kind, under `MCP TASKS`, with the clock, `■ stop`, `RECENT` and the toast a background shell has. A task whose server asks the person a question (an elicitation) shows `?` and `waits` until they answer; its clock runs on, since the server works all along, where a shell that waits for permission has not started.
+
+- **The id is in the answer's words alone.** The call's result is the text Claude Code answers it with (`MCP tool "plugin:shop:ci/build" started server-side task … It was moved to the background as task kj2mup0da …`): no field carries the task's id, as `backgroundTaskId` does for a shell. The deck reads that line and nothing else of the answer. Should a later Claude Code word it otherwise, the call gets no row, and the task gets one when Claude stops, from `classic.Stop`'s `background_tasks` (`type: 'MCP task'`, `server`, `tool`), with its time from then. A test holds the exact line as 2.1.310 words it, so a change shows there first.
+- **A question names a server, not a task.** `classic.Elicitation` carries `mcp_server_name` and no task id, and fires before the call's answer returns, so before the deck knows the task. A question from a server with a call under way waits for that call's answer, and the row starts out waiting; one from a server with no call under way marks its newest running task. `classic.ElicitationResult` (any `action`) lets each of the server's tasks run on. Only the server's name is read: not the message, the form or the answer.
+- **Main thread only.** Claude Code makes tasks only of the main thread's calls, so a subagent's MCP call is passed by.
+- **`watch` stays a tool with `wake`.** A mod's tool (`$.tool.register`) answers in place and cannot return a task, so the deck cannot make `watch` an MCP task. `wake`, a prompt the deck submits when the checks are over, does what a task's notification would.
+
+### The main thread's runs end (0.9)
+
+From a session of 2026-11-15, on 0.8.5: Claude opened a plan of four steps, called `step` not once, finished the job, the conversation was compacted and went on with other work. An hour later the pane still showed the plan at `0/4` with its first step running and a clock at `53m 59s`, under `Nothing runs right now.`; `/deck clear` left it, since the deck took it for running. Only a subagent's end stopped a run (0.8.4 added a new plan of the same loop); nothing ended the main thread's. Claude Code's own task list, shown with no setting on, ran on the same way when a task was left `in_progress`.
+
+- **A run of the main thread's runs while its turn does.** `turn.start` and `turn.complete` of the main thread bound it. Five seconds after a turn ends with nothing it started still running, a run no step moved since waits: `stoppedAt` is set and its steps keep their states. Not as a subagent's end does it, which sets the running step back to waiting: the main thread may go on in a later turn, and a step set back would never be ended by the next `start`, which ends only what runs.
+- **Why five seconds, and why what runs holds it.** A turn often ends on "the build runs in the background": the plan is not over. And a background job's end starts a turn by its notification, a moment after the job's row closes; the five seconds bridge that moment, with no read of the prompt to tell a turn Claude Code started from one the person typed.
+- **No half hour takes a waiting run.** First built to leave as what is over does, and changed the same day: a person who answers a question forty minutes on would find the plan gone and Claude's next `step` refused. It leaves by a clear, by its `×`, or half an hour after a new plan of its loop stops it for good. The cost is a forgotten plan's one dim row.
+- **Nothing brings a waiting run back but a step.** A later turn may be the same job or another, and the deck cannot tell; a run shown as waiting that goes on is the smaller wrong than one shown as running that is over.
+- **The main thread's last step is its own to end.** Before, the note told it to call `step` only to move on, and only the `step` tool's own description, read once the tool is loaded, said to mark the last one done: a plan Claude followed to the letter stayed at one short of done. Now the note, the plan's answer and the answer to the last step's `start` each say so. Ending it with the turn's answer, as a subagent's is, was built first and taken out the same day: a turn of the main thread may end on a question to the person with the step half made, and the deck cannot tell that answer from the job's last, so a job not over would have read as done. A plan whose last step Claude does not end waits at one short of done.
+- **`step` answers what comes next**: the next leaf's id, or that the one started is the last. The words are where the agent reads them, at each call, and cost a few tokens.
+- **A waiting run says so**: dim, `‖` beside its mark and by the step that was under way, its clock held. A stopped run was drawn as one that runs, in the running color.
+- **`Nothing runs right now.` counts a run under way**: the line is left out while a run is under way with no shell or agent.
+- **A way out for the person**: a run's row ends with `×`, which takes that run, under way or not; `/deck clear all` takes every run; and `/deck clear` counts the runs under way it left, where it said only that what runs stays. Its answer still carries no title.
+- **`/deck off`** is the name of what `/deck close` does, which stays as another word for it: `close` read as closing the pane, and took the deck away in every session. `/deck help` lists the commands. The label's `×`, which changes every session, now says in a toast how to undo it, and a stop that did not work says so.
+- **The rows of a run** (from the same session's pane, 52 cells wide): a cut step had a fold mark before its state, so its title began two cells right of one that fits, and a running one read `▸ ⏵`; and every row kept the cells of a count and a time it did not show, so titles were cut with fourteen empty cells beside them. A step now has its state mark alone and its cut title is the button; any cut title opens, a run's and a branch's too; a row keeps cells for what it shows; and the bar counts a running step as half.
+- **Not built: a word to Claude after a compaction** that its plan is open. It would put the plan's state into a prompt (`prompt.submit`'s `context`), which the deck changes nowhere else, at a cost in tokens every time; a run that waits and leaves needs no such word. A compaction is not hooked at all.
+
 ## Checked
 
 Both on 2026-10-05 with Claude Code 2.1.289: a throwaway mod that logged every event under `claude -p`, then 0.1 itself in an interactive session.
@@ -175,6 +204,15 @@ Both on 2026-10-05 with Claude Code 2.1.289: a throwaway mod that logged every e
 - The same end also arrives as `prompt.submit` with `origin.kind: 'task-notification'`, whose text is the engine's envelope (`<task-id>`, `<status>`, a summary that quotes the command). **The mod does not use it**: reading it would be reading a prompt's text, which the row's fields make unnecessary. The cost: with no surface drawing rows (`claude -p`) an end is seen only through `classic.Stop`, without its status. Nothing draws the deck there either.
 - The notification is delivered late while a turn runs: a shell that ended 3 s into a 14 s foreground command was reported when that command returned. `props.task.durationMs` would give the true length, but the rows of background shells did not carry it in this build. So a background shell's time runs until Claude Code reports its end; where a row does carry the length, the mod takes it.
 - `classic.Stop` lists what still runs in `background_tasks`, each with the same `id`, `type: 'shell'`, `status`, `description` and `command`. Only the ids are read. A shell the mod tracks that is neither there nor reported has ended without a notice (its session was cleared, say), and is closed with no status.
+
+**MCP tasks**, on 2026-10-25 with Claude Code 2.1.310: a throwaway mod with an MCP server of its own whose tools answered `tools/call` with `resultType: 'task'`, one of them `input_required` with an elicitation form.
+
+- The `tool.call` of `mcp__plugin_<…>` returns `{ ref, result: [{ type: 'text', text }], text }`; the text names the server's task id and Claude Code's own background task id, `It was moved to the background as task <id>`. That id is the one the notification row, `classic.Stop` and `TaskStop` use.
+- The notification row's `props.task` is `{ id, status }` alone: no type and no `durationMs`. It is drawn more than once, and a task's end is taken once.
+- `classic.Stop`'s `background_tasks` lists it as `{ id, type: 'MCP task', status, description: '<server>/<tool>', server, tool }`. `$.agent.list()` does not.
+- `TaskStop` on it sends `tasks/cancel` to the server and answers `{ message, task_id, task_type: 'mcp_task', command }`.
+- With `input_required`, the order was: `tool.call` in, `classic.Elicitation` (`mcp_server_name`, `message`, `mode`, `requested_schema`), the call's answer, then `classic.ElicitationResult` (`mcp_server_name`, `action`, `content`) when the person answered. `classic.Notification` fires too, as `elicitation_dialog` and `elicitation_response`. Claude Code stops polling while the task waits.
+- The server's progress (`statusMessage`) reaches no event.
 
 **A subagent sees the mod's tool.** A `general-purpose` subagent found `mcp__probe__ping` as the main thread did (deferred behind `ToolSearch` on this machine, where 500 tools are listed) and called it; the `tool.call` carried the subagent's `agentId`. So `plan` and `step` work inside a subagent, and the run is named from `$.agent.list()` by that id.
 

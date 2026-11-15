@@ -4,8 +4,14 @@ import type { Job } from '../types'
 
 import {
   NO_WORK,
+  answered,
   backgrounded,
   ended,
+  hasTaskOf,
+  listed,
+  mcpJob,
+  mcpTaskOf,
+  questioned,
   reported,
   revived,
   settled,
@@ -87,4 +93,56 @@ test('an agent that ended and works again runs on in its row', async () => {
 
   expect(again.recent).toEqual([])
   expect(again.running[0]).toMatchObject({ id: 'agent-1', status: 'running', endedAt: 0 })
+})
+
+// The line Claude Code 2.1.310 answered a task-making MCP call with, as seen
+// live. The deck finds the task in it alone: when Claude Code words it
+// otherwise, this test fails first.
+const MCP_ANSWER =
+  'MCP tool "plugin:taskprobe:srv/slow_job" started server-side task probe-1-mh4n2k1x. ' +
+  'It was moved to the background as task kj2mup0da and keeps running on the server; ' +
+  'you will be notified when it completes.'
+
+test('an MCP call\'s answer names the background task it became, and the tool', async () => {
+  expect(mcpTaskOf(MCP_ANSWER)).toEqual({ taskId: 'kj2mup0da', name: 'plugin:taskprobe:srv/slow_job' })
+  expect(mcpTaskOf('{"issues":[]}')).toBeUndefined()
+
+  const job = mcpJob('call-1', 'kj2mup0da', 'plugin:taskprobe:srv/slow_job', 10)
+  expect(job.title).toBe('srv/slow_job')
+  expect(job.detail).toBe('plugin:taskprobe:srv/slow_job')
+  expect(mcpJob('c', 't', 'github/build', 0).title).toBe('github/build')
+})
+
+test('an MCP task waits on its server\'s question until the person answers, and its clock runs on', async () => {
+  const work = started(NO_WORK, mcpJob('c', 't', 'plugin:shop:ci/build', 0))
+  expect(hasTaskOf(work, 'plugin:shop:ci')).toBe(true)
+  expect(hasTaskOf(work, 'plugin:shop:cd')).toBe(false)
+
+  const asking = questioned(work, 'plugin:shop:ci')
+  expect(asking.running[0]?.isAsking).toBe(true)
+  expect(questioned(work, 'other').running[0]?.isAsking).toBe(false)
+  expect(answered(asking, 'plugin:shop:ci').running[0]?.isAsking).toBe(false)
+
+  const over = reported(asking, { taskId: 't', status: 'done' }, 9000)
+  expect(over.recent[0]).toMatchObject({ status: 'done', startedAt: 0, endedAt: 9000 })
+})
+
+test('an MCP task Claude Code lists that the deck has no row of gets one; the rest are left alone', async () => {
+  const work = started(NO_WORK, mcpJob('c', 'known', 'plugin:shop:ci/build', 0))
+  const tasks = [
+    { id: 'known', type: 'MCP task', status: 'running', server: 'plugin:shop:ci', tool: 'build' },
+    { id: 'new', type: 'MCP task', status: 'running', server: 'plugin:shop:ci', tool: 'deploy' },
+    { id: 'sh', type: 'shell', status: 'running' },
+  ]
+  const after = listed(work, tasks, 50)
+
+  expect(after.running.map((job) => job.taskId)).toEqual(['known', 'new'])
+  expect(after.running[1]).toMatchObject({ kind: 'mcp', title: 'ci/deploy', startedAt: 50 })
+  expect(listed(after, tasks, 60)).toBe(after)
+})
+
+test('an MCP task Claude Code no longer lists ends with no status', async () => {
+  const work = started(NO_WORK, mcpJob('c', 't', 'plugin:shop:ci/build', 0))
+
+  expect(settled(work, [], 100).recent[0]).toMatchObject({ kind: 'mcp', status: 'ended' })
 })

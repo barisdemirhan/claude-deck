@@ -2,8 +2,10 @@ import { expect, test } from 'claude-code/testing'
 
 import {
   activeOf,
+  hintOf,
   opened,
   planned,
+  rested,
   rowsOf,
   runOf,
   stepped,
@@ -148,4 +150,34 @@ test('a task list is one flat run a loop, and a deleted task leaves it', async (
   expect(moved[1]?.steps).toEqual([{ id: '1', title: 'Read', status: 'running', startedAt: 5, endedAt: 0 }])
   // The other loop's task of the same id is untouched.
   expect(moved[0]?.steps[0]?.status).toBe('pending')
+})
+
+test("the main thread's run waits once its turn ended after its last step: its steps keep their states", async () => {
+  const run = after(['1.1 start', '1.2 start'])
+  const [left] = rested([run], 5_000, 9_000)
+  const rows = rowsOf(left ?? run, { r1: true }, 900_000, false)
+
+  expect(left?.steps.find((step) => step.id === '1.2')?.status).toBe('running')
+  expect(activeOf([left ?? run])).toBeUndefined()
+  // Its clock reads the moment it began to wait, and what was under way says so.
+  expect(rows[0]?.span).toBe('8s')
+  expect(rows.filter((row) => row.isStopped).map((row) => row.key)).toEqual(['r1', 'r1/1', 'r1/1.2'])
+  // A step moves it on.
+  expect(activeOf([stepped(left ?? run, '2.1', 'start', 12_000).run ?? run])?.id).toBe('r1')
+  // A run a step moved after the turn ended, a subagent's and one GitHub feeds go on.
+  expect(rested([run], 1_000, 9_000)[0]?.stoppedAt).toBe(0)
+  expect(rested([{ ...run, loop: 'agent-1' }], 5_000, 9_000)[0]?.stoppedAt).toBe(0)
+  expect(rested([{ ...run, feed: 'checks' as const }], 5_000, 9_000)[0]?.stoppedAt).toBe(0)
+})
+
+test("a step's answer names the next step, and says whose the last one is to end", async () => {
+  const short = runOf('r1', 'Ship', 'plan', '', '', planned('Build\nShip'), 0)
+
+  expect(hintOf(short, '1', 'start')).toBe(' Next: 2.')
+  expect(hintOf(short, '2', 'start')).toBe(' It is the last step: call done when it is finished.')
+  expect(hintOf({ ...short, loop: 'agent-1' }, '2', 'start')).toBe(
+    ' It is the last step: it is done by itself when you answer.',
+  )
+  expect(hintOf(short, '2', 'done')).toBe('')
+  expect(hintOf(short, '1', 'fail')).toBe('')
 })

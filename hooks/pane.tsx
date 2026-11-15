@@ -50,8 +50,10 @@ export type PaneView = {
   runs: readonly (readonly Row[])[]
   /** The runs a running agent opened, by the agent's id: drawn under its row. */
   nested: Readonly<Record<string, readonly (readonly Row[])[]>>
-  /** A press on a run's, a branch's or a cut step's fold mark. */
+  /** A press on a run's or a branch's fold mark, or on a cut title. */
   onFold: (row: Row) => void
+  /** A press on a run's `×`: that run leaves the pane, even while it is under way. */
+  onDrop: (row: Row) => void
   /** The rows the person opened, by `job:<id>` or `step:<key>`. */
   open: Readonly<Record<string, boolean>>
   /** A press on a shell's or an agent's mark or title: opens and closes its detail. */
@@ -89,11 +91,16 @@ const rule = ({ Text }: Kit, columns: number): RenderElement => (
   </Text>
 )
 
-/** A shell's command, at most eight lines' worth of cells, or an agent's model and effort. */
+/**
+ * A shell's command, at most eight lines' worth of cells; an MCP task's tool
+ * by its full name; or an agent's model and effort.
+ */
 const detailOf = (job: Job, cells: number): string =>
   job.kind === 'shell'
     ? fitted(`$ ${job.detail}`, Math.max(1, cells) * 8)
-    : [modelName(job.model), job.effort === '' ? '' : `${job.effort} effort`]
+    : job.kind === 'mcp'
+      ? fitted(job.detail, Math.max(1, cells) * 8) || 'mcp'
+      : [modelName(job.model), job.effort === '' ? '' : `${job.effort} effort`]
         .filter((part) => part !== '')
         .join(' · ') || 'agent'
 
@@ -316,41 +323,54 @@ const STEP_COLORS: Readonly<Record<Row['status'], string | undefined>> = {
   failed: COLORS.failed,
 }
 
+/** A run that stopped with steps left, and what was under way in it. */
+const STOPPED = '‖'
+
 const COUNT_CELLS = 6
+/** A run's `×` and the gap before it. */
+const DROP_CELLS = 2
 const METER_CELLS = 9
 
 /**
  * One row of a run. A run's and a branch's mark is a button that folds and
  * unfolds it: `▾` open, `▸` folded while under way, and its state's own mark
- * when folded before its start or after its end. A leaf whose title is cut
- * opens to the full title; a leaf that fits keeps its state mark alone.
+ * when folded before its start or after its end. A leaf's mark is its state's
+ * glyph alone. A title that is cut is a button: a press opens the full title,
+ * wrapped, under the row. A run that stopped with steps left is dim and says
+ * so with `‖` beside its mark, as does the step that was under way in it. A
+ * run drawn on its own has a `×` at its end, which takes it out of the pane.
+ * A row keeps cells only for the columns it shows.
  *
- * `▾ Auth renewal                 ▰▰▰▰▰▱▱▱ 5/8   12m 40s`
+ * `▾ Auth renewal                 ▰▰▰▰▰▱▱▱ 5/8   12m 40s ×`
  * `    ✓ Move the old table                        1m 30s`
  */
 const stepRow = (kit: Kit, row: Row, view: PaneView, indent = 0): RenderElement => {
   const { Box, Text, Button } = kit
-  const isQuiet = row.status === 'done' || row.status === 'pending'
+  const isQuiet = row.status === 'done' || row.status === 'pending' || row.isStopped
+  const glyph = row.isStopped ? STOPPED : STEP_GLYPHS[row.status]
+  const color = row.isStopped ? undefined : STEP_COLORS[row.status]
+  const isDim = row.isStopped || row.status === 'pending'
   const folded = row.status === 'running' || row.kind === 'run' ? '▸' : STEP_GLYPHS[row.status]
   // A run folded away still says how it stands, beside its mark.
-  const state = row.kind === 'run' && (row.status === 'done' || row.status === 'failed')
+  const state = row.kind === 'run' && (row.status === 'done' || row.status === 'failed' || row.isStopped)
   const hasMeter = row.meter !== '' && view.columns >= BAR_FROM
+  const hasCount = row.count !== ''
+  const hasSpan = row.span !== ''
+  const hasDrop = row.kind === 'run' && indent === 0
   const inset = 2 * (row.depth + indent)
   const room =
-    view.columns - 2 * PAD - inset - 2 - (state ? 2 : 0) - COUNT_CELLS -
-    SPAN_CELLS - (hasMeter ? METER_CELLS : 0) - 1
-  const isCut = row.kind === 'leaf' && fitted(row.title, room) !== row.title
+    view.columns - 2 * PAD - inset - 2 - (state ? 2 : 0) - (hasCount ? COUNT_CELLS : 0) -
+    (hasSpan ? SPAN_CELLS : 0) - (hasMeter ? METER_CELLS : 0) - (hasDrop ? DROP_CELLS : 0) - 1
+  const isCut = fitted(row.title, room) !== row.title
   const key = `step:${row.key}`
   const isOpen = isCut && view.open[key] === true
   const onPress = () => {
     view.onFold({ ...row, key, isOpen })
   }
   const mark =
-    isCut ? (
-      <Button key={`step-mark:${row.key}`} plain label={isOpen ? '▾' : '▸'} onPress={onPress} />
-    ) : row.kind === 'leaf' ? (
-      <Text color={STEP_COLORS[row.status]} dimColor={row.status === 'pending'}>
-        {STEP_GLYPHS[row.status]}
+    row.kind === 'leaf' ? (
+      <Text color={color} dimColor={isDim}>
+        {glyph}
       </Text>
     ) : (
       <Button
@@ -370,10 +390,10 @@ const stepRow = (kit: Kit, row: Row, view: PaneView, indent = 0): RenderElement 
         <Box width={2} flexShrink={0}>
           {mark}
         </Box>
-        {(state || isCut) && (
+        {state && (
           <Box width={2} flexShrink={0}>
-            <Text color={STEP_COLORS[row.status]} dimColor={row.status === 'pending'}>
-              {STEP_GLYPHS[row.status]}
+            <Text color={color} dimColor={isDim}>
+              {glyph}
             </Text>
           </Box>
         )}
@@ -382,15 +402,15 @@ const stepRow = (kit: Kit, row: Row, view: PaneView, indent = 0): RenderElement 
             <Button
               key={key}
               plain
-              dimColor={!isOpen && isQuiet}
-              label={fitted(row.title, room - 2)}
+              dimColor={!isOpen && (row.kind === 'run' ? row.isStopped : isQuiet)}
+              label={fitted(row.title, room)}
               onPress={onPress}
             />
           ) : (
             <Text
               bold={row.kind === 'run'}
               color={row.status === 'failed' ? STEP_COLORS.failed : undefined}
-              dimColor={row.kind !== 'run' && isQuiet}
+              dimColor={row.kind === 'run' ? row.isStopped : isQuiet}
               wrap="truncate-end"
             >
               {row.title}
@@ -399,20 +419,37 @@ const stepRow = (kit: Kit, row: Row, view: PaneView, indent = 0): RenderElement 
         </Box>
         {hasMeter && (
           <Box width={METER_CELLS} flexShrink={0} justifyContent="flex-end">
-            <Text color={STEP_COLORS[row.status]} dimColor={row.status === 'pending'}>
+            <Text color={color} dimColor={isDim}>
               {row.meter}
             </Text>
           </Box>
         )}
-        <Box width={COUNT_CELLS} flexShrink={0} justifyContent="flex-end">
-          <Text dimColor={row.kind !== 'run'}>{row.count}</Text>
-        </Box>
-        <Box width={SPAN_CELLS} flexShrink={0} justifyContent="flex-end">
-          <Text dimColor={row.status !== 'running'}>{row.span}</Text>
-        </Box>
+        {hasCount && (
+          <Box width={COUNT_CELLS} flexShrink={0} justifyContent="flex-end">
+            <Text dimColor={row.kind !== 'run'}>{row.count}</Text>
+          </Box>
+        )}
+        {hasSpan && (
+          <Box width={SPAN_CELLS} flexShrink={0} justifyContent="flex-end">
+            <Text dimColor={row.status !== 'running' || row.isStopped}>{row.span}</Text>
+          </Box>
+        )}
+        {hasDrop && (
+          <Box width={DROP_CELLS} flexShrink={0} justifyContent="flex-end">
+            <Button
+              key={`drop:${row.key}`}
+              plain
+              dimColor
+              label="×"
+              onPress={() => {
+                view.onDrop(row)
+              }}
+            />
+          </Box>
+        )}
       </Box>
       {isOpen && (
-        <Box paddingLeft={inset + 4}>
+        <Box paddingLeft={inset + 2}>
           <Text wrap="wrap">{row.title}</Text>
         </Box>
       )}
@@ -456,11 +493,21 @@ export const paneTree = (kit: Kit, view: PaneView): RenderElement => {
   const isOver = (rows: readonly Row[]): boolean =>
     rows[0]?.status === 'done' || rows[0]?.status === 'failed' || rows[0]?.isStopped === true
   const canClear = work.recent.length > 0 || view.runs.some(isOver)
-  // What runs, in two sections: the shells nobody's agent started, then each
-  // agent with what it started under it.
+  // A run under way is work that runs, though no shell or agent does.
+  const hasLiveRun = view.runs.some((rows) => !isOver(rows))
+  const hasTop = work.running.length > 0 || !hasLiveRun
+  // What runs, in up to three sections: the shells nobody's agent started,
+  // the MCP tasks, then each agent with what it started under it.
   const isTop = (job: Job): boolean => !work.running.some((one) => one.id === job.owner)
-  const shells = work.running.filter((job) => job.kind === 'shell' && isTop(job))
-  const agents = work.running.filter((job) => job.kind === 'agent' && isTop(job))
+  const runs = (
+    [
+      ['SHELLS', 'shell'],
+      ['MCP TASKS', 'mcp'],
+      ['AGENTS', 'agent'],
+    ] as const
+  )
+    .map(([title, kind]) => [title, work.running.filter((job) => job.kind === kind && isTop(job))] as const)
+    .filter(([, jobs]) => jobs.length > 0)
   const blank = <Text> </Text>
   // Above the prompt the newest few ended jobs are listed, and the rest counted.
   const recent = view.isInline ? work.recent.slice(0, RECENT_INLINE) : work.recent
@@ -473,16 +520,17 @@ export const paneTree = (kit: Kit, view: PaneView): RenderElement => {
     <Box flexDirection="column" paddingX={PAD}>
       {head(kit, view)}
       {line}
-      {work.running.length === 0 && (
+      {work.running.length === 0 && !hasLiveRun && (
         <Text dimColor>{isIdle ? 'Nothing runs yet.' : 'Nothing runs right now.'}</Text>
       )}
-      {shells.length > 0 && section(kit, `SHELLS · ${shells.length}`, blank, shells, view, false)}
-      {shells.length > 0 && agents.length > 0 && line}
-      {agents.length > 0 && section(kit, `AGENTS · ${agents.length}`, blank, agents, view, false)}
+      {runs.flatMap(([title, jobs], index) => [
+        ...(index > 0 ? [line] : []),
+        section(kit, `${title} · ${jobs.length}`, blank, jobs, view, false),
+      ])}
       {isIdle && (
-        <Text dimColor>Shells, agents and task lists Claude starts show here while they run.</Text>
+        <Text dimColor>Shells, agents, MCP tasks and task lists Claude starts show here while they run.</Text>
       )}
-      {more.flatMap((part) => [line, part])}
+      {more.flatMap((part, index) => [...(index > 0 || hasTop ? [line] : []), part])}
       {work.recent.length > 0 && line}
       {work.recent.length > 0 &&
         section(kit, 'RECENT', hidden > 0 ? <Text dimColor>{`+${hidden} more`}</Text> : blank, recent, view)}
